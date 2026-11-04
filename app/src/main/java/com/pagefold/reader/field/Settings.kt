@@ -60,9 +60,6 @@ data class Settings(
     val speed: Int = 100,               // 语速 50-200
     val pitch: Int = 100,               // 音高 50-200
 
-    // 本机语音包里，用户自己挑着装进来的那几个（已停用，留着兼容旧存档）
-    val sysPickedJson: String = "",
-
     // 多角色朗读
     val castOn: Boolean = true,
     /*
@@ -173,17 +170,6 @@ data class Settings(
     }
 
     fun withEngines(list: List<EngineCfg>): Settings = copy(enginesJson = Engines.encode(list))
-
-    /** 用户自己挑进应用的本机语音包。空 = 一个都没挑。 */
-    val sysPicked: List<String>
-        get() {
-            if (sysPickedJson.isBlank()) return emptyList()
-            val t = object : TypeToken<List<String>>() {}.type
-            return runCatching { Gson().fromJson<List<String>>(sysPickedJson, t) }.getOrDefault(emptyList())
-        }
-
-    fun withSysPicked(list: List<String>): Settings =
-        copy(sysPickedJson = Gson().toJson(list))
 }
 
 /**

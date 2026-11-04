@@ -115,7 +115,7 @@ object Volc {
 
         val req = Request.Builder()
             .url(endpoint(base))
-            .header("X-Api-Key", key)
+            .header("X-Api-Key", Auth.head(key))
             .header("X-Api-Resource-Id", rid)
             .header("X-Api-Request-Id", UUID.randomUUID().toString())
             .header("Content-Type", "application/json")

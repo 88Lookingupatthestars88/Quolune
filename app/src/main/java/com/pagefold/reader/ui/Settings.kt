@@ -91,6 +91,7 @@ import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
 import com.pagefold.reader.kit.Hint
 import com.pagefold.reader.kit.IconBtn
+import com.pagefold.reader.voice.Auth
 import com.pagefold.reader.voice.Speak
 import com.pagefold.reader.voice.Voice
 import com.pagefold.reader.voice.Why
@@ -1324,7 +1325,7 @@ private fun VoiceBlock(
 
         InlineField("名称", name, { name = it; push() }, "随便起")
         InlineField("接口地址", base, { base = it; push() }, "https://…")
-        InlineField("钥匙", key, { key = it; push() }, "sk-…", secret = true)
+        InlineField("钥匙", key, { key = it; push() }, "sk-…", secret = true, sanitize = Auth::clean)
 
         /*
          * 模型。清单全部照列，一条不筛。
@@ -1459,6 +1460,9 @@ private fun InlineField(
     onChange: (String) -> Unit,
     hint: String,
     secret: Boolean = false,
+    /* 入框前先过一道。钥匙那一格用它：一个汉字混进去，拼请求头时会抛
+     * IllegalArgumentException（拿不住的那种），整个应用当场退出。 */
+    sanitize: ((String) -> String)? = null,
 ) {
     val s = LocalSkin.current
     /*
@@ -1484,7 +1488,7 @@ private fun InlineField(
             }
             BasicTextField(
                 value = value,
-                onValueChange = onChange,
+                onValueChange = if (sanitize == null) onChange else { v -> onChange(sanitize(v)) },
                 singleLine = true,
                 textStyle = TextStyle(color = s.ink, fontSize = 12.sp),
                 visualTransformation = if (secret && !open) {

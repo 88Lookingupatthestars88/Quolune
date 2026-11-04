@@ -120,7 +120,7 @@ object MiniMax {
 
         val req = Request.Builder()
             .url(endpoint(base))
-            .header("Authorization", "Bearer $key")
+            .header("Authorization", Auth.bearer(key))
             .header("Content-Type", "application/json")
             .post(payload.toRequestBody(json))
             .build()

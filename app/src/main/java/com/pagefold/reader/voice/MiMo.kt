@@ -205,12 +205,14 @@ class MiMo(
 
         val b = Request.Builder()
             .url(base.trimEnd('/') + "/v1/chat/completions")
-            .header("api-key", key)
+            .header("api-key", Auth.head(key))
             .header("Content-Type", "application/json")
         extra.forEach { (k, v) ->
             val low = k.lowercase()
             // 这三个由程序自己管，用户填了也不覆盖
-            if (low != "api-key" && low != "content-type" && low != "authorization") b.header(k, v)
+            if (low != "api-key" && low != "content-type" && low != "authorization") {
+                runCatching { b.header(k, Auth.clean(v)) }
+            }
         }
         val req = b.post(payload.toRequestBody(json)).build()
 

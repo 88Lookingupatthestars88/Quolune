@@ -16,6 +16,8 @@ import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -28,7 +30,13 @@ import java.util.concurrent.atomic.AtomicReference
 object Edge {
 
     private const val WSS = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1"
-    private const val WSS2 = "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+    /*
+     * 曾经这里还有第二条路：api.msedgeservices.com。
+     *
+     * 2026-11 实测：那条握手直接回 403，带不带 Ocp-Apim-Subscription-Key 都一样。
+     * 它已经不是备胎，是第三个必然失败的尝试 —— 前两次 403 之后再来一次，
+     * 只是把用户多晾八秒，最后还是同一个错。删掉。
+     */
     private const val CHROME = "143.0.3650.75"
 
     /**
@@ -44,8 +52,8 @@ object Edge {
     /** 这两个头可以用户改，默认值放在 field/Headers.kt 里。 */
     @Volatile var ua: String = EDGE_UA
     @Volatile var lang: String = "zh-CN,zh;q=0.9"
-    /** 一次请求最多等多久。不要设得太长，卡住时没法退回来。 */
-    @Volatile var timeoutSec: Int = 12
+    /** 空闲多久算卡住。收到任何一帧都会重新计时，所以这是「对面还活着」的判据。 */
+    @Volatile var timeoutSec: Int = 10
 
     private val AUDIO_MARK = "Path:audio\r\n".toByteArray(Charsets.US_ASCII)
 
@@ -72,18 +80,32 @@ object Edge {
         speed: Int = 100,
         pitch: Int = 100,
     ): ByteArray {
-        var last: Throwable? = null
-        // 三次：原端点 → 校正时钟后原端点 → 备用端点（不需要 GEC 令牌的那条）。
-        // 403 只在握手阶段出现，换端点是一次干净的重新开始。
-        val plans = listOf(true, true, false)
-        for (gec in plans) {
+        var last: Denied? = null
+        /*
+         * 最多两次：原样发一次，403 就照着对面 Date 把钟拨正再发一次。
+         *
+         * 403 只有一个原因 —— 时间对不上。令牌是「三百秒一格」算出来的，
+         * 手机和对面差超过一格（五分钟）就每格都错。测过：偏 ±300 秒还能过，
+         * 偏 ±600 秒必 403，且 403 的回包里带着对面的 Date，正好用来对表。
+         *
+         * 别的失败（超时、连不上、音频空）**不重试**：同样的条件再跑一遍，
+         * 结果一样，只是把用户多晾十几秒。慢就是慢，如实报出来。
+         */
+        repeat(2) { round ->
             try {
-                return send(text, voiceId, r, speed, pitch, gec)
+                return send(text, voiceId, r, speed, pitch)
             } catch (e: Denied) {
                 last = e
-                e.serverMs?.let { skewMs = it - System.currentTimeMillis() }
+                val server = e.serverMs
+                if (server == null) {
+                    // 没拿到对面的时间，第二次也是同一个错令牌，别浪费。
+                    throw IOException("Edge 不认这台手机的钟，403。把系统时间调成自动再试")
+                }
+                // 第一次就用对面的时间校准，第二次必然是对的。
+                skewMs = server - System.currentTimeMillis()
+                if (round == 1) throw IOException("Edge 403，对过表还是被拒。过一会儿再来")
             } catch (e: Exception) {
-                last = e
+                throw (e as? IOException) ?: IOException(e.message ?: "Edge 没念出来")
             }
         }
         throw (last as? IOException) ?: IOException(last?.message ?: "Edge 没念出来")
@@ -95,10 +117,9 @@ object Edge {
         r: Reading?,
         speed: Int,
         pitch: Int,
-        gec: Boolean,
     ): ByteArray {
         val req = Request.Builder()
-            .url(if (gec) buildUrl() else buildUrl2())
+            .url(buildUrl())
             .header("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold")
             .header("User-Agent", if (ua.contains("Edg/")) ua else EDGE_UA)
             .header("Accept-Language", lang)
@@ -112,6 +133,12 @@ object Edge {
         val err = AtomicReference<Throwable?>(null)
         val done = CountDownLatch(1)
         val rid = UUID.randomUUID().toString().replace("-", "")
+        /** 已经收到过 Path:audio 那一帧。之后的二进制帧全是裸音频。 */
+        val audioStarted = AtomicBoolean(false)
+        /** 对面正经说了「念完了」。用来把「close 之后 OkHttp 回调的 Socket closed」区分开。 */
+        val ended = AtomicBoolean(false)
+        /** 最后一帧到达的时刻。等的时候看它，判断是「慢」还是「死了」。 */
+        val lastFrame = AtomicLong(System.currentTimeMillis())
 
         val listener = object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
@@ -125,22 +152,42 @@ object Edge {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                lastFrame.set(System.currentTimeMillis())
                 if (text.contains("Path:turn.end")) {
-                    runCatching { ws.close(1000, null) }
+                    ended.set(true)
+                    // 先放行再关连接：close() 会等对面回帧，拖着没意义。
                     done.countDown()
+                    runCatching { ws.close(1000, null) }
                 }
             }
 
             override fun onMessage(ws: WebSocket, bytes: ByteString) {
+                lastFrame.set(System.currentTimeMillis())
                 val d = bytes.toByteArray()
-                val at = indexOf(d, AUDIO_MARK)
-                if (at >= 0) {
-                    val from = at + AUDIO_MARK.size
-                    if (from < d.size) synchronized(out) { out.write(d, from, d.size - from) }
+                synchronized(out) {
+                    /*
+                     * 带 Path:audio 头的只有**第一帧**，后面十几帧是纯音频。
+                     *
+                     * 以前每一帧都去找这个头，找不到就把整帧丢掉 —— 一段一百来字的话，
+                     * 三十几 KB 只留下开头那一小块，交出去的是断在中间的 mp3，
+                     * 播放器解不开，听着就是「Edge 不出声」。
+                     */
+                    if (audioStarted.get()) {
+                        out.write(d)
+                        return
+                    }
+                    val at = indexOf(d, AUDIO_MARK)
+                    if (at >= 0) {
+                        audioStarted.set(true)
+                        val from = at + AUDIO_MARK.size
+                        if (from < d.size) out.write(d, from, d.size - from)
+                    }
                 }
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                // 我们自己 close/cancel 带出来的失败，不能盖掉已经收全的音频。
+                if (ended.get()) return
                 err.set(if (response?.code == 403) Denied(dateOf(response.header("Date"))) else t)
                 done.countDown()
             }
@@ -151,22 +198,51 @@ object Edge {
         }
 
         val ws = http.newWebSocket(req, listener)
-        try {
-            if (!done.await(timeoutSec.toLong(), TimeUnit.SECONDS)) throw IOException("Edge 超时")
-        } finally {
-            runCatching { ws.cancel() }
+        /*
+         * 等多久，按「还动不动」算，不按「总共几秒」算。
+         *
+         * 实测：+0% 正常语速，一句 30 字 1.9 秒；同一句话拖到 −50%，
+         * 音频时长翻倍，服务端要 12.5 秒才推完 —— 原来那条 12 秒的死线正好把它切在中间，
+         * 于是「慢速听书」这一路必然超时，重试三次还是超时，用户听到的是一直转圈。
+         *
+         * 现在的判据是两条：
+         * · 空闲超过 10 秒没有任何一帧过来，才算卡住；
+         * · 总预算 = 12 秒底 + 每字 120 毫秒，给长段落和慢速留够。
+         */
+        val idleMs = timeoutSec.coerceIn(5, 60) * 1000L
+        val budgetMs = 12_000L + text.length.coerceAtMost(2_000) * 120L
+        val startedAt = System.currentTimeMillis()
+        var ok = false
+        while (true) {
+            if (done.await(200, TimeUnit.MILLISECONDS)) { ok = true; break }
+            val now = System.currentTimeMillis()
+            if (now - lastFrame.get() > idleMs) break
+            if (now - startedAt > budgetMs) break
         }
-        err.get()?.let { throw it }
+        /*
+         * 先取结论，再断连接。
+         *
+         * cancel() 会让 OkHttp 回调 onFailure(Socket closed)；反过来的话，音频明明收全了，
+         * 也会被这一下判成失败 —— 而且这个先后是竞态，看机器忙不忙，表现成「有时能念有时不念」。
+         */
+        val failure = err.get()
+        runCatching { ws.cancel() }
+        if (ok) {
+            failure?.let { throw it }
+        } else {
+            val got = synchronized(out) { out.size() }
+            // 音频已经收了一大截，只是对面没发 turn.end：交付已收到的，比整段丢掉强。
+            if (got < 8192) {
+                failure?.let { throw it }
+                throw IOException(if (System.currentTimeMillis() - lastFrame.get() > idleMs) "Edge 卡住不动了" else "Edge 超时")
+            }
+        }
         val bytes = synchronized(out) { out.toByteArray() }
         if (bytes.isEmpty()) throw IOException("Edge 没有返回音频")
         return bytes
     }
 
     private class Denied(val serverMs: Long?) : RuntimeException("Edge 403")
-
-    /** 备用端点：不需要 Sec-MS-GEC，令牌走 Ocp-Apim-Subscription-Key。 */
-    private fun buildUrl2(): String =
-        "$WSS2?Ocp-Apim-Subscription-Key=${Stamp.CLIENT}"
 
     private fun buildUrl(): String {
         val cid = UUID.randomUUID().toString().replace("-", "")

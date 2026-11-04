@@ -177,7 +177,7 @@ object CloneApi {
                 .build()
             val req = Request.Builder()
                 .url(url)
-                .header("Authorization", "Bearer $key")
+                .header("Authorization", Auth.bearer(key))
                 .post(body)
                 .build()
             http.newCall(req).execute().use { r ->
@@ -232,7 +232,7 @@ object CloneApi {
             val fid = http.newCall(
                 Request.Builder()
                     .url("$root/v1/files/upload")
-                    .header("Authorization", "Bearer $key")
+                    .header("Authorization", Auth.bearer(key))
                     .post(up)
                     .build()
             ).execute().use { r ->
@@ -256,7 +256,7 @@ object CloneApi {
             http.newCall(
                 Request.Builder()
                     .url("$root/v1/voice_clone")
-                    .header("Authorization", "Bearer $key")
+                    .header("Authorization", Auth.bearer(key))
                     .header("Content-Type", "application/json")
                     .post(payload.toRequestBody(json))
                     .build()
