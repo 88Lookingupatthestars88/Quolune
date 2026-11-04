@@ -1,0 +1,60 @@
+name: 问题反馈
+description: 崩了、念不出来、界面不对、书读乱了
+title: "[问题] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 先说清是哪一步出的问题。能重现最好，不能重现也写上来。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么问题
+      description: 你看到的是什么。有报错原文就照抄，别改字。
+      placeholder: 点播放之后一直转圈，最后弹「取出声来」。
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: 怎么重现
+      description: 从打开应用开始，一步一步写。第几次出现也说一下。
+      placeholder: |
+        1. 书房导入一本 txt
+        2. 点开第三章
+        3. 点播放
+        第 3 步十次里出七八次。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: 用的哪家嗓子
+      description: 设置 → 声源里看哪个开着。好几个都开着就选出错的那家。
+      options:
+        - Edge
+        - 小米 MiMo
+        - 硅基流动
+        - 火山引擎
+        - MiniMax
+        - 阿里百炼
+        - OpenAI
+        - 本机语音包
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号与系统版本
+      placeholder: 小米 8 SE，Android 10
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或补充
+      description: 截图直接拖进来。有别的线索也写这。

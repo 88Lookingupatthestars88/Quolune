@@ -1,0 +1,35 @@
+name: 新功能
+description: 想要一个什么功能，或者现在哪里用着别扭想改
+title: "[新功能] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: 你想要什么
+      description: 一句话说清。能说具体动作最好，比如「书签」「按章节跳过片头」。
+      placeholder: 想在书里加书签，长按那段存下来，下次直接跳回去。
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: 现在怎么不方便
+      description: 说你现在是怎么绕过去的也行。绕不过去就说绕不过去。
+      placeholder: 现在只能记页码，换字号之后页码全乱，找不回来。
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号与系统版本
+      description: 设置 → 关于手机里能看到。不确定就空着。
+      placeholder: 小米 8 SE，Android 10
+
+  - type: textarea
+    id: more
+    attributes:
+      label: 补充
+      description: 截图、别人的应用怎么做的、你想到的做法。都可以。
