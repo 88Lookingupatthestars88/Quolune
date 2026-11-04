@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 查别的朗读引擎要这条，Android 11 起不加就扫不到 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 复刻嗓音要当场录一段。只用来录样本，不后台收音。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Pagefold">
+
+        <activity
+            android:name=".Main"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Pagefold">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            系统级朗读引擎。三件事缺一不可：
+            1. action TTS_SERVICE + category DEFAULT，系统才扫得到
+            2. meta-data android.speech.tts 指向 tts_engine.xml，设置页的齿轮才有地方跳
+            3. permission BIND_TTS_SERVICE，只让系统绑
+        -->
+        <service
+            android:name=".play.TtsEngine"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_TTS_SERVICE">
+            <intent-filter>
+                <action android:name="android.intent.action.TTS_SERVICE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech.tts"
+                android:resource="@xml/tts_engine" />
+        </service>
+
+        <!--
+            系统「文字转语音」设置页要问引擎三件事，缺一件那一页就残一半：
+            CHECK_TTS_DATA 决定语言栏能不能选，GET_SAMPLE_TEXT 决定「播放」键是不是灰的。
+            这几个必须是 NoDisplay/透明，开完立刻 finish，不能有界面。
+        -->
+        <activity
+            android:name=".play.CheckVoiceData"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <!--
+                这一个 category 是能不能被叫起来的关键。
+                系统发的是隐式 intent，framework 会当作带了 CATEGORY_DEFAULT；
+                filter 里没写 DEFAULT，就永远匹配不上，startActivityForResult
+                直接抛 ActivityNotFound —— 于是「播放」键一直是灰的。
+            -->
+            <intent-filter>
+                <action android:name="android.speech.tts.engine.CHECK_TTS_DATA" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".play.GetSampleText"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.speech.tts.engine.GET_SAMPLE_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".play.BookPlayer"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/paths" />
+        </provider>
+    </application>
+</manifest>
