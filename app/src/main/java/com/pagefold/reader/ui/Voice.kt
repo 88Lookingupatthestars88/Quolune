@@ -1576,7 +1576,7 @@ internal fun TuneRows(
                     "采样温度", draft.temp.toFloat(), 0f, 100f, 5f,
                     { onChange(draft.copy(temp = it.roundToInt())) },
                     unit = "", low = "0.00", high = "1.00",
-                    hint = "越低越稳，越高同一段字每次念得越不一样。小米超过 1.00 会拒。",
+                    hint = "越低越稳，越高同一段字每次念得越不一样。",
                     format = { "%.2f".format(it / 100f) }
                 )
             }

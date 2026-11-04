@@ -681,7 +681,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
      * 这里不看是谁在拖：只要有一个手指按着、且压在边缘带里，就按距离给速度。
      * 自己拖手柄、拖动选区、甚至普通滑动，都照常。
      */
-    val edgePush = remember { mutableFloatStateOf(0f) }
+    val barPush = remember { mutableFloatStateOf(0f) }
     var listTop by remember { mutableFloatStateOf(0f) }
     var userMoved by remember { mutableStateOf(false) }
 
@@ -732,14 +732,14 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
      */
     LaunchedEffect(list, bar.state) {
         while (isActive) {
-            if (bar.state != TextToolbarStatus.Shown) { edgePush.floatValue = 0f; delay(60); continue }
+            if (bar.state != TextToolbarStatus.Shown) { barPush.floatValue = 0f; delay(60); continue }
             val r = bar.rect
             val h = list.layoutInfo.viewportSize.height.toFloat()
-            if (h <= 0f || r == Rect.Zero) { edgePush.floatValue = 0f; delay(30); continue }
+            if (h <= 0f || r == Rect.Zero) { barPush.floatValue = 0f; delay(30); continue }
             val band = h * 0.16f
             val endY = r.bottom - listTop          // 选区末端在可视区里的位置
             val startY = r.top - listTop
-            edgePush.floatValue = when {
+            barPush.floatValue = when {
                 endY > h - band -> ((endY - (h - band)) / band).coerceIn(0f, 1f) * 20f
                 startY < band -> -((band - startY) / band).coerceIn(0f, 1f) * 20f
                 else -> 0f
@@ -751,7 +751,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     // 真正滚的那一步。
     LaunchedEffect(list) {
         while (isActive) {
-            val d = edgePush.floatValue
+            val d = barPush.floatValue
             if (d != 0f) {
                 val before = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset
                 runCatching { list.scrollBy(d) }

@@ -347,8 +347,12 @@ object Engines {
         val t = object : TypeToken<List<EngineCfg>>() {}.type
         val list = runCatching { gson.fromJson<List<EngineCfg>>(raw, t) }.getOrNull()
         if (list.isNullOrEmpty()) return DEFAULT
-        // 老存档里的 Edge 条目已下架，读的时候丢掉。
-        val out = list.filterNot { it.id == "edge" || it.protocol == "edge" }.toMutableList()
+        // 只留 http(s) 地址、协议认得的条目；其余的（含已下架的）丢掉。
+        val known = setOf("mimo", "speech", "volc", "minimax", "bailian", "system")
+        val out = list.filter { e ->
+            val b = (e.base ?: "").trim().lowercase()
+            (b.isEmpty() || b.startsWith("http")) && e.protocol in known
+        }.toMutableList()
         DEFAULT.forEach { d -> if (out.none { it.id == d.id }) out.add(d) }
         // 模型不许空：空着的按地址补一个，同时把协议补齐。
         // 每条各包一层 —— 一条坏数据不该让整个声源表读不出来。

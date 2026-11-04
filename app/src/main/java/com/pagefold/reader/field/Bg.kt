@@ -48,7 +48,7 @@ data class BgSpec(
  */
 object Bg {
 
-    private const val MAX_EDGE = 1600
+    private const val MAX_SIDE = 1600
 
     fun file(ctx: Context, page: String): File = File(ctx.filesDir, "bg_$page.jpg")
 
@@ -70,7 +70,7 @@ object Bg {
         if (w <= 0 || h <= 0) return null
 
         var sample = 1
-        while (w / sample > MAX_EDGE * 2 || h / sample > MAX_EDGE * 2) sample *= 2
+        while (w / sample > MAX_SIDE * 2 || h / sample > MAX_SIDE * 2) sample *= 2
 
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         val raw = ctx.contentResolver.openInputStream(uri)?.use {
@@ -78,8 +78,8 @@ object Bg {
         } ?: return null
 
         val longest = maxOf(raw.width, raw.height)
-        if (longest <= MAX_EDGE) return raw
-        val scale = MAX_EDGE.toFloat() / longest
+        if (longest <= MAX_SIDE) return raw
+        val scale = MAX_SIDE.toFloat() / longest
         val out = Bitmap.createScaledBitmap(
             raw, (raw.width * scale).toInt().coerceAtLeast(1),
             (raw.height * scale).toInt().coerceAtLeast(1), true
