@@ -870,7 +870,7 @@ class BookPlayer : Service() {
             ?: Catalog.byName(fresh, now.defaultVoice)
             ?: fresh.firstOrNull()
             ?: all.firstOrNull()
-            ?: Catalog.EDGE.first()
+            ?: Catalog.MIMO.first()
     }
 
     private fun updateNote(text: String) {

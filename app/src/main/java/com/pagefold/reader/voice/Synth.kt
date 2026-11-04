@@ -5,9 +5,10 @@ import com.pagefold.reader.book.Cue
 import com.pagefold.reader.book.Reading
 import com.pagefold.reader.field.EngineCfg
 import com.pagefold.reader.field.Engines
-import com.pagefold.reader.field.Headers
 import com.pagefold.reader.field.Settings
 import com.pagefold.reader.field.VoiceSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
 
@@ -136,8 +137,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     }
 
     fun sync(s: Settings) {
-        // 播放时每一句都会走到这儿。设置没换过就直接回头 ——
-        // 下面那几个 Headers.build / Engines.first 不是白给的，一句一次太浪费。
+        // 播放时每一句都会走到这儿。设置没换过就直接回头。
         if (cfg === s) return
         val m = Engines.first(s.engines, VoiceSource.MIMO)
         val base = m?.base?.ifBlank { null } ?: s.mimoBase
@@ -146,9 +146,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             mimo = MiMo(base, key)
         }
         mimo.appCtx = ctx
-        val hs = Headers.build(s)
-        Edge.ua = Headers.ua(hs)
-        Edge.lang = Headers.language(hs)
         mimo.extra = emptyList()
         cfg = s
     }
@@ -171,7 +168,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     /** 这一句该走哪套协议。 */
     private fun protocolOf(s: Settings, v: Voice): String =
         route(s, v)?.protocol ?: when (v.engine.lowercase()) {
-            "edge" -> "edge"
             "system" -> "system"
             else -> "mimo"
         }
@@ -198,7 +194,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         }
         // 这一本的念速也要进指纹：倍速是烘进音频里的，不进指纹就会放到旧速度那条。
         append('/').append(rate.coerceIn(50, 300))
-        append('/').append(s.client)
         if (r != null) {
             append('/').append(r.kind.name).append(',').append(r.rate)
             append(',').append(r.pitch).append(',').append(r.volume)
@@ -212,12 +207,11 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         v: Voice,
         text: String,
         r: Reading?,
-        temp: Int,
         rate: Int = 100,
         extra: String = "",
     ): String {
         /* rev 进 key：合成规则一变，旧音频就不再被复用，升级完不会还听到旧毛病。 */
-        val raw = fingerprint(s, v, r, rate) + "|" + text + "|t=$temp|r=$CLIP_REV|" + extra
+        val raw = fingerprint(s, v, r, rate) + "|" + text + "|r=$CLIP_REV|" + extra
         val md = MessageDigest.getInstance("MD5").digest(raw.toByteArray())
         return md.joinToString("") { "%02x".format(it) }
     }
@@ -333,8 +327,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         one: com.pagefold.reader.field.Vt? = null,
     ): Clip {
         sync(s)
-        val temp = s.temperature
-        val k = key(s, v, text, r, temp, rate, one?.let { "u=${it.speed},${it.pitch},${it.volume},${it.mood},${it.temp}" }.orEmpty())
+        val k = key(s, v, text, r, rate, one?.let { "u=${it.speed},${it.pitch},${it.volume},${it.mood},${it.temp}" }.orEmpty())
         /*
          * force = 试听时用：绕开缓存，逼它真去问一次。
          * 不绕的话听到的是旧文件，刚改的模型、刚换的钥匙全没验到。
@@ -379,7 +372,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
          * 它不说，我们说。
          */
         val eng = route(s, v)
-        if (proto != "edge" && proto != "system") {
+        if (proto != "system") {
             // 拦截要用**真正会发的那个名字**，不是嗓源格子上那个：
             // 设计/克隆音色各走各的模型，三者可能都不同。
             val used = if (proto == "mimo") MiMo.modelFor(v, eng) else eng?.modelOr().orEmpty()
@@ -393,25 +386,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             Why.check(used, proto, role)?.let { throw IllegalStateException("不能合成：$it") }
         }
         when (proto) {
-            "edge" -> {
-                val id = v.param.ifBlank { s.edgeVoice }
-                /*
-                 * 这一家的语气只有一条路：把情绪折算成 SSML 里的快慢、高低、轻重。
-                 * 折算发生在算这一段 Reading 的时候，用的是全局那一档 ——
-                 * 所以这一副自己调了调门，得按它重算一遍，否则调了等于没调。
-                 */
-                val rr = if (v.reactsToStyle) {
-                    val m = own.mood.trim()
-                    if (m.isEmpty() || m == s.style.trim()) r
-                    else Cue.of(text, before, after, m, !s.cue, r?.style.orEmpty())
-                } else null
-                val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    Edge.mp3(text, id, rr, sp, pitchPct)
-                }
-                file = land(k, "mp3", bytes)
-                ext = "mp3"
-                note(k, text, v.name, ext)
-            }
             "volc" -> {
                 // 火山豆包：自己的口，自己的 resource id，自己的 speaker。
                 // 音调在这一家的 post_process 里，不在 audio_params 里。
@@ -520,20 +494,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                     text = text,
                     voice = v,
                     instruction = null,
-                    /*
-                     * temperature **不发**。
-                     *
-                     * 这一路是 chat/completions，不是纯配音口。给了 0.5 的温度，
-                     * 同一段文字每次合成出来的东西都不一样 —— 那本身就是
-                     * 「前面多出一截话」的入口：模型拿到自由度，就有机会把
-                     * 前一条 user 消息（语气词「开心」「愤怒」）也当成台词念出来。
-                     * 配音要的是确定性，同样的字，第二次必须还是那段声音。
-                     *
-                     * 唯一例外是这一副自己在「调」里填过温度 —— 那说明他愿意换一点变化，
-                     * 按他填的发。没填就一个字节都不发。
-                     */
-                    temperature = if (own.temp == 100) null
-                                  else (own.temp.coerceIn(0, 200) / 100f),
+                    // 采样温度 0.00–1.00。超过 1 对面直接 400。
+                    temperature = (own.temp.coerceIn(0, 100) / 100f),
                     cfg = eng,
                     /*
                      * 这一家没有数值的 speed / pitch 字段。这两格和调门一起，

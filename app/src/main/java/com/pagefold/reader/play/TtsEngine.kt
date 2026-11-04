@@ -21,8 +21,7 @@ import java.util.Locale
  * 现在：进来立刻 start(24000, 16bit, 单声道)，再一句一句合成、一句一句喂。
  * 采样率不跟引擎走，一律 24000；引擎吐 16k/22k/44k 都转过来。
  *
- * 还有一件：这一路**不看**用户开没开 Edge。系统里选了 Quolune 就该出声，
- * 所以音色池空的时候兜底成 Edge，它不要密钥。
+ * 还有一件：系统里选了 Quolune 就该出声，所以音色池空的时候兜底成第一副开着的嗓源。
  */
 class TtsEngine : TextToSpeechService() {
 
@@ -54,7 +53,7 @@ class TtsEngine : TextToSpeechService() {
 
     override fun onGetVoices(): MutableList<android.speech.tts.Voice> {
         val out = ArrayList<android.speech.tts.Voice>()
-        runCatching { pool() }.getOrDefault(Catalog.EDGE).forEach { v ->
+        runCatching { pool() }.getOrDefault(Catalog.MIMO).forEach { v ->
             runCatching {
                 out += android.speech.tts.Voice(
                     tag(v),
@@ -80,7 +79,7 @@ class TtsEngine : TextToSpeechService() {
     override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String {
         val l = lang?.lowercase(Locale.ROOT).orEmpty()
         val ok = l == "zho" || l == "chi" || l == "cmn" || l.startsWith("zh")
-        val list = runCatching { pool() }.getOrDefault(Catalog.EDGE)
+        val list = runCatching { pool() }.getOrDefault(Catalog.MIMO)
         if (!ok || list.isEmpty()) return list.firstOrNull()?.let { tag(it) } ?: ""
         // 用户自己挑的那副优先，别的应用念中文就是这个声
         val want = runCatching { app.field.now.defaultVoice }.getOrDefault("")
@@ -90,7 +89,7 @@ class TtsEngine : TextToSpeechService() {
     /** 系统问「这个名字你认不认」。 */
     override fun onIsValidVoiceName(voiceName: String?): Int {
         val want = voiceName?.removePrefix("tl:") ?: return TextToSpeech.ERROR
-        val list = runCatching { pool() }.getOrDefault(Catalog.EDGE)
+        val list = runCatching { pool() }.getOrDefault(Catalog.MIMO)
         return if (list.any { it.id == want }) TextToSpeech.SUCCESS else TextToSpeech.ERROR
     }
 
@@ -113,7 +112,7 @@ class TtsEngine : TextToSpeechService() {
         val s = app.field.now
         val mine = Catalog.ours(s.engines, app.box.custom(), emptyList())
             .filter { it.engine != "system" }
-        return mine.ifEmpty { Catalog.EDGE }
+        return mine.ifEmpty { Catalog.MIMO }
     }
 
     override fun onSynthesizeText(request: SynthesisRequest, callback: SynthesisCallback) {
@@ -143,7 +142,7 @@ class TtsEngine : TextToSpeechService() {
         }
 
         val s = app.field.now
-        val voices = runCatching { pool() }.getOrDefault(Catalog.EDGE)
+        val voices = runCatching { pool() }.getOrDefault(Catalog.MIMO)
         val want = voiceNameOf(request)?.removePrefix("tl:")
         val v = voices.firstOrNull { it.id == want }
             ?: Catalog.byName(voices, s.defaultVoice)

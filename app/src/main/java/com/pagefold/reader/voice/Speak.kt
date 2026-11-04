@@ -51,9 +51,7 @@ object Speak {
     ): ByteArray = withContext(Dispatchers.IO) {
         if (base.isBlank()) throw IOException("还没填接口地址")
         if (key.isBlank()) throw IOException("还没填钥匙")
-        /* 钥匙里混进汉字（粘贴带进来的）时，OkHttp 会在 build() 里抛
-         * IllegalArgumentException —— 那是 RuntimeException，抓不住就是闪退。
-         * 在这里先拦，说清第几位是什么。 */
+        // 汉字会让 OkHttp 在 build() 抛 IllegalArgumentException，先拦下。
         Auth.why(key)?.let { throw IOException(it) }
         if (model.isBlank()) throw IOException("还没填模型")
         if (text.isBlank()) throw IOException("这一段是空的")
@@ -100,7 +98,6 @@ object Speak {
             .header("Content-Type", "application/json")
         extra.forEach { (k, v) ->
             val low = k.lowercase()
-            // 用户自己填的头也可能带汉字，同样会在 build() 里把进程带走。
             if (low != "authorization" && low != "content-type") {
                 runCatching { b.header(k, Auth.clean(v)) }
             }
@@ -332,10 +329,9 @@ object Speak {
     private suspend fun fetchModels(base: String, key: String, proto: String): List<String> =
         withContext(Dispatchers.IO) {
         if (base.isBlank() || key.isBlank()) return@withContext emptyList()
-        /* 钥匙里有汉字就别发请求了。这里不发，界面拿到空清单，用户自己填模型；
-         * 真要发的话，header 会在 build() 里抛 IllegalArgumentException 把进程带走。 */
+        // 钥匙不合规就不发，界面拿到空清单自己填模型。
         if (Auth.why(key) != null) return@withContext emptyList()
-        if (proto == "volc" || proto == "edge" || proto == "system") return@withContext emptyList()
+        if (proto == "volc" || proto == "system") return@withContext emptyList()
         val url = modelsEndpoint(base, proto).let {
             // 硅基的清单按大类分，audio 里只有语音相关的；文字模型全被挡在外面。
             if (proto == "speech" && base.contains("siliconflow") && !it.contains("?")) "$it?type=audio"

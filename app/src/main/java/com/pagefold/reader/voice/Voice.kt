@@ -9,14 +9,13 @@ import java.io.File
  * 一个可用的音色。
  * param 的含义随 kind 变化：
  *   PRESET / DESIGN / CLONE → MiMo 的 voice 字段（预设名或描述原文）
- *   EDGE                    → Edge 的 voice id，如 zh-CN-YunxiNeural
  *   SYSTEM                  → 系统 TTS 的 voice name
  */
 data class Voice(
     val id: String,
     val name: String,
-    val kind: String,          // preset / design / clone / edge / system
-    val engine: String,        // mimo / edge / system
+    val kind: String,          // preset / design / clone / system
+    val engine: String,        // mimo / system / 嗓源 id
     val param: String,
     val desc: String = "",
     val gender: String = "",   // f / m / ""
@@ -111,7 +110,7 @@ class VoiceBox(ctx: Context) {
         if (incoming.isEmpty()) return 0 to note
 
         val cur = custom().toMutableList()
-        val builtinNames = (Catalog.MIMO + Catalog.EDGE).map { it.name + "/" + it.engine }.toSet()
+        val builtinNames = Catalog.MIMO.map { it.name + "/" + it.engine }.toSet()
         var n = 0
         var dup = 0
         incoming.forEach { v ->
@@ -136,7 +135,7 @@ class VoiceBox(ctx: Context) {
     fun export(): String = Pack.write(custom())
 
     /** 连内置一起导 —— 换手机、重装，不必再一个个找回来。 */
-    fun exportAll(): String = Pack.write(Catalog.MIMO + Catalog.EDGE + custom())
+    fun exportAll(): String = Pack.write(Catalog.MIMO + custom())
 
 }
 
@@ -154,27 +153,12 @@ object Catalog {
         Voice("mimo_dean", "Dean", "preset", "mimo", "Dean", "English male", "m", "middle", listOf("en"), true),
     )
 
-    val EDGE: List<Voice> = listOf(
-        Voice("edge_xiaoxiao", "晓晓", "edge", "edge", "zh-CN-XiaoxiaoNeural", "国语女声，温和自然", "f", "young", listOf("国语"), true),
-        Voice("edge_xiaoyi", "晓伊", "edge", "edge", "zh-CN-XiaoyiNeural", "国语女声，活泼些", "f", "young", listOf("国语"), true),
-        Voice("edge_yunxi", "云希", "edge", "edge", "zh-CN-YunxiNeural", "国语男声，阳光少年", "m", "young", listOf("国语"), true),
-        Voice("edge_yunjian", "云健", "edge", "edge", "zh-CN-YunjianNeural", "国语男声，低沉有力", "m", "middle", listOf("国语"), true),
-        Voice("edge_yunyang", "云扬", "edge", "edge", "zh-CN-YunyangNeural", "国语男声，播报腔", "m", "middle", listOf("国语"), true),
-        Voice("edge_yunxia", "云夏", "edge", "edge", "zh-CN-YunxiaNeural", "国语男声，稚气", "m", "young", listOf("国语"), true),
-        Voice("edge_xiaobei", "晓北", "edge", "edge", "zh-CN-liaoning-XiaobeiNeural", "东北话女声", "f", "young", listOf("方言"), true),
-        Voice("edge_xiaoni", "晓妮", "edge", "edge", "zh-CN-shaanxi-XiaoniNeural", "陕西话女声", "f", "young", listOf("方言"), true),
-        Voice("edge_hiumaan", "曉曼", "edge", "edge", "zh-HK-HiuMaanNeural", "粤语女声", "f", "young", listOf("粤语"), true),
-        Voice("edge_wanlung", "雲龍", "edge", "edge", "zh-HK-WanLungNeural", "粤语男声", "m", "middle", listOf("粤语"), true),
-        Voice("edge_hsiaochen", "曉臻", "edge", "edge", "zh-TW-HsiaoChenNeural", "台湾国语女声", "f", "young", listOf("台湾"), true),
-        Voice("edge_yunjhe", "雲哲", "edge", "edge", "zh-TW-YunJheNeural", "台湾国语男声", "m", "middle", listOf("台湾"), true),
-    )
-
-    fun all(custom: List<Voice>): List<Voice> = MIMO + EDGE + custom
+    fun all(custom: List<Voice>): List<Voice> = MIMO + custom
 
     /**
      * 现在真正能用的那些音色。
      *
-     * 只看开着的嗓子：Edge 开着才有那 12 个，本机开着才有手机里的，
+     * 只看开着的嗓子：MiMo 开着才有那 8 副，本机开着才有手机里的，
      * 一副没开就是空。这样音色页上列出来的，每一副都真能响。
      *
      * @param sys 本机语音包（调用方自己读好了传进来；系统 TTS 那条路上传空，避免自己调自己）
@@ -191,10 +175,6 @@ object Catalog {
             out += MIMO.filter { it.engine == "mimo" }
             out += custom.filter { it.engine == "mimo" }
         }
-        if (com.pagefold.reader.field.VoiceSource.EDGE in on) {
-            out += EDGE.filter { it.engine == "edge" }
-            out += custom.filter { it.engine == "edge" }
-        }
         // 「添一副」建出来的嗓源：音色名直接写在嗓源上（OpenAI 的 alloy、硅基的 alex…），
         // 这里照着列出来。不然一副新嗓源开起来是空的，得先手工造音色才能听 —— 那道坎不该有。
         engines.filter { it.on && it.protocol in com.pagefold.reader.field.Presets.WITH_VOICES }.forEach { e ->
@@ -202,7 +182,7 @@ object Catalog {
             out += custom.filter { it.engine == e.id }
         }
         if (com.pagefold.reader.field.VoiceSource.OPENAI in on) {
-            out += custom.filter { it.engine != "mimo" && it.engine != "edge" && it.engine != "system" }
+            out += custom.filter { it.engine != "mimo" && it.engine != "system" }
         }
         if (com.pagefold.reader.field.VoiceSource.SYSTEM in on) out += sys
         return out
@@ -219,18 +199,16 @@ object Catalog {
          * 列出来还会让卡片写「8 个」，看着像清掉模型没生效。
          */
         val on = engines.filter {
-            it.on && (it.protocol == "edge" || it.protocol == "system" || (it.model ?: "").isNotBlank())
+            it.on && (it.protocol == "system" || (it.model ?: "").isNotBlank())
         }
         if (on.isEmpty()) return emptyList()
         return on.map { e ->
             val mine = when (e.src) {
                 com.pagefold.reader.field.VoiceSource.MIMO ->
                     MIMO.filter { it.engine == "mimo" } + custom.filter { it.engine == "mimo" }
-                com.pagefold.reader.field.VoiceSource.EDGE ->
-                    EDGE.filter { it.engine == "edge" } + custom.filter { it.engine == "edge" }
                 com.pagefold.reader.field.VoiceSource.SYSTEM -> sys
                 com.pagefold.reader.field.VoiceSource.OPENAI ->
-                    custom.filter { it.engine != "mimo" && it.engine != "edge" && it.engine != "system" }
+                    custom.filter { it.engine != "mimo" && it.engine != "system" }
             }
             // 标准口的嗓源自己带着音色名，一并列出来；它底下自造的音色也挂这里。
             val mine2 = if (e.protocol in com.pagefold.reader.field.Presets.WITH_VOICES) {

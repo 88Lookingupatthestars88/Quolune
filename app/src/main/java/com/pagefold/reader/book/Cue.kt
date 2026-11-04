@@ -10,7 +10,7 @@ package com.pagefold.reader.book
  * 上下文只在这儿用，判完就只剩几个数字。请求里永远只有当前这一句正文，
  * 否则参考原文会被念出来，同一句话的缓存也会因为邻居改字而全废。
  *
- * 只看前后各一句，纯规则，不联网，不花钱，Edge 和 MiMo 都吃得上。
+ * 只看前后各一句，纯规则，不联网，不花钱。
  */
 data class Reading(
     val kind: Kind,

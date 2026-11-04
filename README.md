@@ -12,9 +12,7 @@ Quolune 应用作为安卓的听书应用，致力于为用户提供优质的听
 
 本项目采用 GPL-3.0 许可，全文在 LICENSE。
 
-应用接入的语音服务：Edge、小米 MiMo、硅基流动、火山引擎、MiniMax、阿里百炼、OpenAI。这些服务均与本项目没有合作关系。
-
-Edge 那一路的令牌算法移植自 rany2/edge-tts（LGPL-3.0），文件是 voice/Stamp.kt，许可全文随包放在 app/src/main/assets/licenses/。
+应用接入的语音服务：小米 MiMo、硅基流动、火山引擎、MiniMax、阿里百炼、OpenAI。这些服务均与本项目没有合作关系。
 
 ## 作者
 

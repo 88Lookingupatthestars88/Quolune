@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 enum class TurnMode { FLIP, SCROLL, CHAPTER }
 
 /** 朗读引擎。 */
-enum class EngineKind { MIMO, EDGE, SYSTEM }
+enum class EngineKind { MIMO, SYSTEM }
 
 /**
  * 全部可调项。整体序列化成一个 JSON 存在 SharedPreferences，
@@ -51,7 +51,6 @@ data class Settings(
     val engine: String = "MIMO",
     val mimoKey: String = "",
     val mimoBase: String = "https://api.xiaomimimo.com",
-    val edgeVoice: String = "zh-CN-YunxiNeural",
     val sysEngine: String = "",
     val sysVoice: String = "",
     val style: String = "平静",          // 情绪档（单嗓子时用）
@@ -62,16 +61,9 @@ data class Settings(
 
     // 多角色朗读
     val castOn: Boolean = true,
-    /*
-     * 旁白与对白各一副。
-     *
-     * 默认写的是 Edge 那两副，因为默认开着的就是 Edge —— 不必钥匙、装上就能念。
-     * 写 MiMo 的名字（白桦 / 苏打）会让新装的人一进书就听见「未设置」：
-     * 名字在库里根本不存在。旧存档里存着 MiMo 名字的人不受影响，
-     * 那一行由 AutoCast 按开着的嗓源换过去。
-     */
-    val narratorVoice: String = "云健",
-    val defaultVoice: String = "晓晓",
+    // 旁白与对白各一副。名字对应的音色不存在时，由 AutoCast 按开着的嗓源换过去。
+    val narratorVoice: String = "白桦",
+    val defaultVoice: String = "茉莉",
     val rulesJson: String = "",
     /** 全局角色表（CastBook 的 JSON）。单本自己的在 BookMeta.castJson，优先。 */
     val castJson: String = "",
@@ -87,7 +79,6 @@ data class Settings(
     val context: Int = 1,               // 合成时往上带几句上文
     val next: Int = 1,                  // 往下带几句下文
     val retryDelayMs: Int = 1200,
-    val temperature: Int = 50,          // 温度 ×100
 
     /** 按段落判角色（旁白/对白/心里话…），判完再定语速音高。 */
     val cue: Boolean = true,
@@ -101,12 +92,6 @@ data class Settings(
     val rate: Int = 100,
     /** 接着上次听时，往前退几段。段落边界常常正好切在半句上。 */
     val rewind: Int = 1,
-
-    /** 出站客户端。chrome / edge / android / ios */
-    val client: String = "chrome",
-
-    // 旧字段：自由写请求头。现在界面不再暴露，留着手改存档用。
-    val headers: String = "",
 
     // 缓存（只用来显示，不再自动删）
     val cacheMaxMb: Int = 0,
@@ -241,7 +226,7 @@ class Field(ctx: Context) {
      *
      * Gson 反序列化不走 Kotlin 构造器，data class 的默认值全部失效：
      * 存档里没有的键会变成 null / 0 / false，不是 Settings() 里写的那些值。
-     * 新加的 client / cue / next 落进旧存档，读出来就是 null，传给 Headers.of 直接炸。
+     * 新加的 cue / next 落进旧存档，读出来就是 null，用的时候直接炸。
      *
      * 所以先用 Settings() 打底，再把存档里有的键盖上去。以后加字段不用写迁移。
      */
@@ -264,24 +249,6 @@ class Field(ctx: Context) {
         if (had < 2) out = out.copy(enginesJson = Engines.encode(out.engines.map { it.copy(on = false) }))
         // 三版起：请求间隔不再是 2 秒。那个数配默认的 6 段预取等于自己把自己卡住。
         if (had < 3 && out.reqIntervalMs >= 2000) out = out.copy(reqIntervalMs = 600)
-        /*
-         * 四版起：一副能念的都没有的存档，把不要钥匙的那副打开。
-         *
-         * 以前装完是一排关着的嗓源：音色页空着，进书按播放没声音，得先去定音里
-         * 自己拨开一副、填一串钥匙才能听 —— 那不叫默认设置，叫空白考卷。
-         * 已经有能念的那几副的人（填过钥匙、开着自己挑的），这里一个字都不动。
-         */
-        if (had < 5) {
-            val usable = out.engines.any { it.on && Engines.blocked(it) == null }
-            if (!usable) {
-                out = out.copy(
-                    enginesJson = Engines.encode(
-                        out.engines.map { if (it.protocol == "edge") it.copy(on = true) else it }
-                    )
-                )
-            }
-        }
-
         out.copy(uiRev = REV)
     }.getOrDefault(Settings(uiRev = REV))
 

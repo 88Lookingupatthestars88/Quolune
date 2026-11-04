@@ -33,8 +33,8 @@ data class Vt(
     val fx: String = "",
     val dialect: String = "",
     val silence: Int = 0,
-    /** 采样温度，100 = 不传（让它用自己那个默认值）。0–200 折成 0.0–2.0。 */
-    val temp: Int = 100,
+    /** 采样温度 ×100：0–100 就是 0.00–1.00。50 = 0.50。 */
+    val temp: Int = 50,
     /** 语种增强。MiniMax 的 language_boost，空 = 不指定。 */
     val boost: String = "",
     /** 文本归一化。MiniMax 的 basic / quality，空 = 不传。 */
@@ -177,7 +177,6 @@ object Caps {
          */
         if (proto == "mimo" && kind == "clone") return emptyList()
         return when (proto) {
-            "edge" -> listOf(Knob.SPEED, Knob.PITCH, Knob.VOLUME, Knob.MOOD)
             "system" -> listOf(Knob.SPEED, Knob.PITCH)
             // 小米没有数值字段，但官方示例就是拿 user 消息说「快一点、高一点」。
             "mimo" -> listOf(Knob.SPEED, Knob.PITCH, Knob.MOOD, Knob.TEMP)
@@ -214,7 +213,6 @@ object Caps {
      * 用户要知道的是这一家能不能调快慢、有没有音调。
      */
     fun brief(proto: String, model: String): String = when (proto) {
-        "edge" -> "快慢 · 音调 · 轻重"
         "system" -> "快慢 · 音调"
         "mimo" -> "快慢 · 音调 · 调门 · 温度"
         "speech" -> if (isSilicon(model)) "快慢 · 增益" else "快慢"

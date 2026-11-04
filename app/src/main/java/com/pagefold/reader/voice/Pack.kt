@@ -119,7 +119,6 @@ object Pack {
             t.contains("clone") || t.contains("克隆") -> "clone"
             t.contains("design") || t.contains("设计") -> "design"
             t.contains("preset") || t.contains("预设") -> "preset"
-            t.contains("edge") -> "edge"
             t.contains("system") || t.contains("系统") -> "system"
             else -> "design"
         }
@@ -128,7 +127,6 @@ object Pack {
     private fun engineOf(raw: String?): String {
         val t = raw.orEmpty().lowercase()
         return when {
-            t.contains("edge") -> "edge"
             t.contains("system") || t.contains("系统") -> "system"
             t.contains("mimo") || t.contains("小米") -> "mimo"
             else -> "mimo"

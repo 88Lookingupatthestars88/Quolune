@@ -4,7 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
 /** 嗓子的来路。 */
-enum class VoiceSource { EDGE, MIMO, SYSTEM, OPENAI }
+enum class VoiceSource { MIMO, SYSTEM, OPENAI }
 
 /**
  * 一副嗓子。
@@ -15,10 +15,9 @@ enum class VoiceSource { EDGE, MIMO, SYSTEM, OPENAI }
  * @param proto  走哪套协议。空 = 按 kind 推（见 [protocol]）。
  *               `mimo`   小米那套 chat/completions（音频藏在 message.audio 里）
  *               `speech` OpenAI 标准口：POST {base}/v1/audio/speech，直接回音频字节
- *               `edge`   Edge 那条 WebSocket
  *               `system` 手机自带的 TTS
  * @param voices 这副嗓源底下有哪几个嗓音名，逗号分隔。
- *               空 = 没得挑（Edge 用内置目录，MiMo 用内置八副）。
+ *               空 = 没得挑（MiMo 用内置八副）。
  *               OpenAI / 硅基这类「音色就是一个词」的服务，填在这里，
  *               音色页就会照着列出来 —— 不用先手工造一遍音色。
  */
@@ -60,7 +59,6 @@ data class EngineCfg(
     val protocol: String
         get() = (proto ?: "").ifBlank {
             when (src) {
-                VoiceSource.EDGE -> "edge"
                 VoiceSource.MIMO -> "mimo"
                 VoiceSource.SYSTEM -> "system"
                 VoiceSource.OPENAI -> "speech"
@@ -314,8 +312,6 @@ object Presets {
 
 /**
  * 嗓子仓。跟设置一起走 JSON，加字段不迁移。
- *
- * 默认两副：Edge 不用钥匙；MiMo 要自己填。
  * 别家从「添一副」里挑，按模板建，不留空壳。
  */
 object Engines {
@@ -327,15 +323,8 @@ object Engines {
      *
      * 地址和模型都填好了，缺的只有钥匙。开关打开、钥匙填上，就能念。
      */
-    /*
-     * 出厂那一排嗓源。
-     *
-     * 只有 Edge 是开着的：它不要钥匙、不要地址、装上就能念 —— 新装的人
-     * 打开书按播放就有声音，再去动别的。其余几家都要自己的钥匙，
-     * 开着一副没填钥匙的，只会让人以为「这个应用念不出来」。
-     */
+    /** 出厂那一排嗓源。全部默认关着，都要自己的钥匙。 */
     val DEFAULT: List<EngineCfg> = listOf(
-        EngineCfg("edge", "Edge", VoiceSource.EDGE.name, base = "wss://speech.platform.bing.com", proto = "edge", on = true),
         /*
          * MiMo 的音色不写在这格 —— 它要带「怎么说」的说明词，走 Voice.kt 里那张表。
          * 写在这里会被当成一排干名字，念起来没有语气。
@@ -358,8 +347,8 @@ object Engines {
         val t = object : TypeToken<List<EngineCfg>>() {}.type
         val list = runCatching { gson.fromJson<List<EngineCfg>>(raw, t) }.getOrNull()
         if (list.isNullOrEmpty()) return DEFAULT
-        // 内置的那几副永远在，用户删掉也能回来
-        val out = list.toMutableList()
+        // 老存档里的 Edge 条目已下架，读的时候丢掉。
+        val out = list.filterNot { it.id == "edge" || it.protocol == "edge" }.toMutableList()
         DEFAULT.forEach { d -> if (out.none { it.id == d.id }) out.add(d) }
         // 模型不许空：空着的按地址补一个，同时把协议补齐。
         // 每条各包一层 —— 一条坏数据不该让整个声源表读不出来。
@@ -404,7 +393,7 @@ object Engines {
      */
     fun blocked(e: EngineCfg): String? {
         if (!e.on) return null
-        if (e.protocol == "edge" || e.protocol == "system") return null
+        if (e.protocol == "system") return null
         if (e.base.isNullOrBlank()) return "还没填接口地址"
         if (e.key.isNullOrBlank()) return "还没填钥匙"
         // 判原始值：modelOr() 会补默认，拿它判等于永远不空。

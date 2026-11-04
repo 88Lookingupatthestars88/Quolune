@@ -35,7 +35,6 @@ body:
       label: 用的哪家嗓子
       description: 设置 → 声源里看哪个开着。好几个都开着就选出错的那家。
       options:
-        - Edge
         - 小米 MiMo
         - 硅基流动
         - 火山引擎

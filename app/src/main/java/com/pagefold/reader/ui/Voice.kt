@@ -186,22 +186,24 @@ fun VoiceScreen(
              * 不是当前这一副的时候没有草稿可传，按它自己存的那份念。
              */
             val live = if (v.id == currentId) draft else null
-            val clip = withContext(Dispatchers.IO) {
+            val res = withContext(Dispatchers.IO) {
                 runCatching {
                     val line = "这一段，念给你听。"
                     val mood = live?.mood?.ifBlank { s.style } ?: s.style
                     val read = Cue.of(line, null, null, mood, !s.cue)
                     app.synth.make(s, v, line, read, one = live)
-                }.getOrNull()
+                }
             }
+            val clip = res.getOrNull()
             if (clip == null) {
                 playing = null
-                msg = "这个引擎不能使用"
+                // 把底层原因摆出来，不再统一说「这个引擎不能使用」。
+                msg = com.pagefold.reader.voice.Why.say(res.exceptionOrNull(), v.name)
                 return@launch
             }
             val ok = Audition.play(v.id, clip.file.absolutePath) { playing = null }
             playing = if (ok) v.id else null
-            if (!ok) msg = "这段解不开"
+            if (!ok) msg = "声音存下来了，播放器解不开这一段"
         }
     }
 
@@ -603,7 +605,7 @@ fun VoiceScreen(
                             exporter.launch("Quolune音色-自建.json")
                         }
                     },
-                    "连内置一起（${custom.size + Catalog.MIMO.size + Catalog.EDGE.size} 副）" to {
+                    "连内置一起（${custom.size + Catalog.MIMO.size} 副）" to {
                         expAll = true
                         expAsk = false
                         busy = "正在写…"
@@ -717,7 +719,6 @@ private fun enginesOn(s: Settings): String =
     s.engines.filter { it.on }.map {
         when (it.src) {
             com.pagefold.reader.field.VoiceSource.MIMO -> "MiMo"
-            com.pagefold.reader.field.VoiceSource.EDGE -> "Edge"
             com.pagefold.reader.field.VoiceSource.SYSTEM -> "本机语音"
             com.pagefold.reader.field.VoiceSource.OPENAI -> it.name.ifBlank { "自建" }
         }
@@ -737,7 +738,6 @@ internal fun freeName(app: App, want: String, skipId: String = ""): String {
     val taken = buildSet {
         addAll(app.box.custom().filter { it.id != skipId }.map { it.name })
         addAll(com.pagefold.reader.voice.Catalog.MIMO.map { it.name })
-        addAll(com.pagefold.reader.voice.Catalog.EDGE.map { it.name })
     }
     if (w !in taken) return w
     var i = 2
@@ -760,7 +760,6 @@ private fun nameOf(engine: String, engines: List<com.pagefold.reader.field.Engin
     engines.firstOrNull { it.id == engine }?.let { return it.name }
     return when (engine) {
         "mimo" -> "MiMo"
-        "edge" -> "Edge"
         "system" -> "本机"
         else -> "自建"
     }
@@ -1424,7 +1423,6 @@ private fun Field(
 internal fun protoOf(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg>): String {
     engines.firstOrNull { it.id == v.engine }?.let { return it.protocol }
     return when (v.engine.lowercase()) {
-        "edge" -> "edge"
         "system" -> "system"
         else -> "mimo"
     }
@@ -1575,10 +1573,11 @@ internal fun TuneRows(
         Card {
             Column(Modifier.padding(vertical = 2.dp)) {
                 Ruler(
-                    "采样温度", draft.temp.toFloat(), 0f, 200f, 5f,
+                    "采样温度", draft.temp.toFloat(), 0f, 100f, 5f,
                     { onChange(draft.copy(temp = it.roundToInt())) },
-                    unit = "", low = "0", high = "2",
-                    hint = "100 是不传，让它自己定。越低越稳，越高同一段字每次念得越不一样。"
+                    unit = "", low = "0.00", high = "1.00",
+                    hint = "越低越稳，越高同一段字每次念得越不一样。小米超过 1.00 会拒。",
+                    format = { "%.2f".format(it / 100f) }
                 )
             }
         }

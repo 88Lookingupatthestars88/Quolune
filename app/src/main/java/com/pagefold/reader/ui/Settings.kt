@@ -568,115 +568,6 @@ private fun TuneScreen(
                 }
             }
 
-            // ── 请求头 ──
-            item { Chapter("请求头") }
-            item {
-                val editing = !s.headers.isNullOrBlank()
-                val rows = remember(s.headers, s.client, editing) {
-                    (if (editing) com.pagefold.reader.field.Headers.parse(s.headers)
-                    else com.pagefold.reader.field.Headers.of(s.client)).toMutableList()
-                }
-                Box(Modifier.padding(horizontal = Sz.gutter)) {
-                    Quiet {
-                        Column(Modifier.padding(vertical = 6.dp)) {
-
-                            Bare("照这套发")
-                            com.pagefold.reader.field.Headers.CLIENTS.forEachIndexed { i, (key, label) ->
-                                if (i > 0) Hair()
-                                Row(
-                                    Modifier.fillMaxWidth()
-                                        .clickable(
-                                            indication = null,
-                                            interactionSource = remember { MutableInteractionSource() }
-                                        ) {
-                                            app.field.edit { c -> c.copy(client = key, headers = "") }
-                                        }
-                                        .padding(vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(label, fontSize = 14.sp, color = skin.ink)
-                                    Spacer(Modifier.weight(1f))
-                                    Text(
-                                        if (!editing && s.client == key) "●" else "○",
-                                        fontSize = 12.sp,
-                                        color = if (!editing && s.client == key) skin.flame else skin.hair
-                                    )
-                                }
-                            }
-
-                            Hair()
-                            Bare("自己写")
-
-                            if (!editing) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Spacer(Modifier.weight(1f))
-                                    Btn(
-                                        "开始改",
-                                        {
-                                            app.field.edit { c ->
-                                                c.copy(headers = com.pagefold.reader.field.Headers.presetText(c.client))
-                                            }
-                                        },
-                                        BtnKind.GHOST
-                                    )
-                                }
-                            } else {
-                                Spacer(Modifier.height(4.dp))
-                                rows.forEachIndexed { i, (k, v) ->
-                                    if (i > 0) Spacer(Modifier.height(8.dp))
-                                    HeaderRow(
-                                        name = k,
-                                        value = v,
-                                        onName = { nk ->
-                                            rows[i] = nk to rows[i].second
-                                            app.field.edit { c ->
-                                                c.copy(headers = rows.joinToString("\n") { "${it.first}: ${it.second}" })
-                                            }
-                                        },
-                                        onValue = { nv ->
-                                            rows[i] = rows[i].first to nv
-                                            app.field.edit { c ->
-                                                c.copy(headers = rows.joinToString("\n") { "${it.first}: ${it.second}" })
-                                            }
-                                        },
-                                        onDrop = {
-                                            rows.removeAt(i)
-                                            app.field.edit { c ->
-                                                c.copy(headers = rows.joinToString("\n") { "${it.first}: ${it.second}" })
-                                            }
-                                        }
-                                    )
-                                }
-                                Spacer(Modifier.height(10.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                                    Btn(
-                                        "加一条",
-                                        {
-                                            rows.add("X-New-Header" to "")
-                                            app.field.edit { c ->
-                                                c.copy(headers = rows.joinToString("\n") { "${it.first}: ${it.second}" })
-                                            }
-                                        },
-                                        BtnKind.GHOST, modifier = Modifier.weight(1f)
-                                    )
-                                    Btn(
-                                        "回到预设",
-                                        {
-                                            app.field.edit { c -> c.copy(headers = "") }
-                                            msg = "回到预设"
-                                        },
-                                        BtnKind.GHOST, modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             /*
              * 只有真崩过才出现的一节。
              *
@@ -763,7 +654,6 @@ private fun noteOf(e: EngineCfg): String {
     // 在卡片上先说一句，省得他点开播放才发现。
     if (Why.notSpeech(e.modelOr(), e.protocol)) return "模型不能念"
     return when {
-        e.kind == "EDGE" -> "12 个，不要钥匙"
         e.kind == "MIMO" -> "8 个"
         e.voiceList().isNotEmpty() -> "${e.voiceList().size} 个"
         // 没有预设音色、但能复刻：把话说成他下一步能做的事。
@@ -1183,7 +1073,7 @@ private fun VoiceBlock(
     LaunchedEffect(e.id, e.model, e.key, e.base, e.on, e.protocol) {
         verdict = null
         if (!e.on) return@LaunchedEffect
-        if (e.protocol == "edge" || e.protocol == "system") return@LaunchedEffect
+        if (e.protocol == "system") return@LaunchedEffect
         val m = (e.model ?: "").trim()
         val k = (e.key ?: "").trim()
         if (k.isBlank()) return@LaunchedEffect
@@ -1197,14 +1087,14 @@ private fun VoiceBlock(
     fun tryProbe() {
         val m = (e.model ?: "").trim()
         val k = (e.key ?: "").trim()
-        if (k.isBlank() || m.isBlank() || trying) return
+        if (trying) return
+        if (k.isBlank() || m.isBlank()) return
         vScope.launch {
             trying = true
             verdict = "正在测试中"
-            val why = if (e.protocol == "mimo") {
-                Speak.probeMimo(e.base ?: "", k, m)
-            } else {
-                Speak.probe(
+            val why = when {
+                e.protocol == "mimo" -> Speak.probeMimo(e.base ?: "", k, m)
+                else -> Speak.probe(
                     e.base ?: "", k, m,
                     com.pagefold.reader.field.Presets.voicesFor(e.base ?: "", e.protocol).firstOrNull().orEmpty()
                 )
@@ -1266,9 +1156,7 @@ private fun VoiceBlock(
              * 而且有的家按字算钱，不打招呼就花掉是不对的。
              * 只在「开着、有钥匙、不是离线那两家」时才出现 —— 别的按了也没意义。
              */
-            if (e.on && !e.key.isNullOrBlank() &&
-                e.protocol != "edge" && e.protocol != "system"
-            ) {
+            if (e.on && !e.key.isNullOrBlank() && e.protocol != "system") {
                 Text(
                     if (trying) "…" else "验",
                     fontSize = 11.sp,
@@ -1301,7 +1189,7 @@ private fun VoiceBlock(
         }
 
         if (!e.on) return@Column
-        if (e.protocol == "edge" || e.protocol == "system") return@Column
+        if (e.protocol == "system") return@Column
 
         Spacer(Modifier.height(4.dp))
 
@@ -1747,64 +1635,6 @@ internal fun Toast(msg: String, onDone: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 11.dp)
         ) {
             Text(msg, fontSize = 12.sp, color = s.ink)
-        }
-    }
-}
-
-@Composable
-private fun HeaderRow(
-    name: String,
-    value: String,
-    onName: (String) -> Unit,
-    onValue: (String) -> Unit,
-    onDrop: () -> Unit,
-) {
-    val s = LocalSkin.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier.width(108.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(s.panelSink)
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-        ) {
-            BasicTextField(
-                value = name,
-                onValueChange = { onName(it.take(40)) },
-                singleLine = true,
-                textStyle = TextStyle(
-                    color = s.inkDim, fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        Spacer(Modifier.width(6.dp))
-        Box(
-            Modifier.weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(s.ground)
-                .border(1.dp, s.hairSoft, RoundedCornerShape(8.dp))
-                .padding(horizontal = 8.dp, vertical = 8.dp)
-        ) {
-            BasicTextField(
-                value = value,
-                onValueChange = { onValue(it.take(400)) },
-                textStyle = TextStyle(
-                    color = s.ink, fontSize = 10.sp, lineHeight = 14.sp,
-                    fontFamily = FontFamily.Monospace
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        Box(
-            Modifier.size(28.dp).clip(CircleShape)
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onDrop() },
-            contentAlignment = Alignment.Center
-        ) {
-            Text("×", fontSize = 13.sp, color = s.inkFaint)
         }
     }
 }

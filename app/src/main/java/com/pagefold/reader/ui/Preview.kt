@@ -76,7 +76,7 @@ fun PreviewScreen(
 
     /*
      * 池子里是「现在开着的嗓源底下，所有真能念的嗓子」：
-     * 内置的 Edge 十二副、MiMo 八副；硅基流动、火山、MiniMax、百炼、OpenAI
+     * 内置的 MiMo 八副；硅基流动、火山、MiniMax、百炼、OpenAI
      * 这几家写在嗓源上的音色名；再加自己造的那几副。
      * 关着的嗓源一副都不列 —— 列出来点了也念不响。
      */
@@ -165,7 +165,7 @@ fun PreviewScreen(
             if (clip == null) return@launch
             val ok = Audition.play(v.id, clip.file.absolutePath) { playing = false }
             playing = ok
-            if (!ok) err = "这个引擎不能使用"
+            if (!ok) err = "声音存下来了，播放器解不开这一段"
         }
     }
 
