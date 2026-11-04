@@ -21,5 +21,3 @@ B 站 UP 主 仰望星空才能无所畏惧。
 ## 支持
 
 Quolune 由一个人维护。如果它对你有用，可以在这里赞助：https://afdian.com/a/Lookingupatthestars
-
-赞助是自愿的，不解锁任何功能。全部代码以 GPL-3.0 发布，任何人都可以自由使用、修改、再分发。
