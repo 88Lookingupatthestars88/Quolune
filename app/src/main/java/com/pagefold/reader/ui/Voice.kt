@@ -116,8 +116,9 @@ fun VoiceScreen(
     var cloning by remember { mutableStateOf(false) }
 
     var refresh by remember { mutableIntStateOf(0) }
-    var playing by remember { mutableStateOf(Audition.playingId) }
     var busy by remember { mutableStateOf<String?>(null) }
+    /** 正在合成哪一副。合成要几秒，这几秒里按钮不能装成「正在播」。 */
+    var hearing by remember { mutableStateOf<String?>(null) }
     var expAsk by remember { mutableStateOf(false) }
     // 正在编辑哪一副（null = 面板关着）
     var editing by remember { mutableStateOf<Voice?>(null) }
@@ -136,11 +137,17 @@ fun VoiceScreen(
 
 
     /*
-     * 当前在用的那一副，按 id 认。按名字比的话，两副嗓源出现同名音色时，
-     * 会有两张卡同时亮着，点哪个都不对。
+     * 「在用哪一副」只有一个答案：先认存下来的名字，认不出就按开着的嗓源给一副。
+     *
+     * 以前这里只认存下来的名字，顶栏却走了一遍兜底，两处口径不一样：
+     * 新装或者存档里那副没了的时候，顶栏写着「在用 冰糖」，下面一张卡都不亮 ——
+     * 看着像坏了。现在两边都从 currentName 取。
      */
-    val currentId = remember(pool, s.defaultVoice) {
-        pool.firstOrNull { it.name == s.defaultVoice || it.param == s.defaultVoice }?.id ?: ""
+    val currentName = remember(pool, s.defaultVoice, s.enginesJson) {
+        AutoCast.resolve(pool, s.engines, s.defaultVoice, dialog = false)
+    }
+    val currentId = remember(pool, currentName) {
+        pool.firstOrNull { it.name == currentName || it.param == currentName }?.id ?: ""
     }
 
     /*
@@ -156,9 +163,9 @@ fun VoiceScreen(
                    else com.pagefold.reader.field.Caps.of(curProto, curModel, curVoice.kind)
 
     // 没调过这一副，就照全局那套显示 —— 屏幕上看到的必须是「念出来会是什么样」。
-    val savedTune = remember(currentId, s.speed, s.pitch, refresh) {
+    val savedTune = remember(currentId, refresh) {
         if (currentId.isNotEmpty() && app.vtune.has(currentId)) app.vtune.of(currentId)
-        else com.pagefold.reader.field.Vt(speed = s.speed, pitch = s.pitch, volume = 100, mood = "")
+        else com.pagefold.reader.field.Vt()
     }
     var draft by remember(currentId, refresh) { mutableStateOf(savedTune) }
     val tuneDirty = draft != savedTune
@@ -168,6 +175,7 @@ fun VoiceScreen(
         // 旧存档里那副可能存的是英文名（`alex`），现在显示的是「沉稳男声 alex」，
         // 所以 param 也要比一次，不然一进页面就被当成「换了个人」。
         val was = app.field.now.defaultVoice
+        // 存下来的名字可能是空的，而界面已经靠兜底亮着一副；这时也要照样写进去。
         if (v.name == was || v.param == was) return
         app.field.edit { it.copy(defaultVoice = v.name, narratorVoice = v.name) }
     }
@@ -175,11 +183,11 @@ fun VoiceScreen(
     fun say(v: Voice) {
         if (Audition.isOn(v.id)) {
             Audition.stop()
-            playing = null
             return
         }
+        if (hearing != null) return
         scope.launch {
-            playing = v.id
+            hearing = v.id
             /*
              * 试听要念的是**手上这份**，不是上次存下的那份 ——
              * 不然推完滑杆点试听，听着一点变化都没有，还得先存再试。
@@ -194,16 +202,15 @@ fun VoiceScreen(
                     app.synth.make(s, v, line, read, one = live)
                 }
             }
+            hearing = null
             val clip = res.getOrNull()
             if (clip == null) {
-                playing = null
                 // 把底层原因摆出来，不再统一说「这个引擎不能使用」。
                 msg = com.pagefold.reader.voice.Why.say(res.exceptionOrNull(), v.name)
                 return@launch
             }
-            val ok = Audition.play(v.id, clip.file.absolutePath) { playing = null }
-            playing = if (ok) v.id else null
-            if (!ok) msg = "声音存下来了，播放器解不开这一段"
+            // 播没播上、播完没有，由 Audition 说了算；这里只报错。
+            if (!Audition.play(v.id, clip.file.absolutePath)) msg = "声音存下来了，播放器解不开这一段"
         }
     }
 
@@ -211,7 +218,7 @@ fun VoiceScreen(
     // 放进 item 就跟着懒加载一起销毁 —— 你滑到下面点一行，上面那张卡根本不在组合里，
     // 想翻也翻不动。提上来之后，列表滚到哪儿它都还醒着。
     val pager = rememberPagerState(
-        initialPage = pool.indexOfFirst { it.name == s.defaultVoice || it.param == s.defaultVoice }.coerceAtLeast(0)
+        initialPage = pool.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
     ) { pool.size }
 
     /*
@@ -263,9 +270,16 @@ fun VoiceScreen(
      * 取消掉任何一段，都不留下后遗症。
      */
     LaunchedEffect(pager, pool) {
-        snapshotFlow { pager.settledPage }.collect { idx ->
-            // 还在滑就不算落点 —— 途中经过的每一页都不是用户要的。
-            if (pager.isScrollInProgress) return@collect
+        /*
+         * 两个状态一起盯，不能只盯 settledPage 再用 isScrollInProgress 去过滤。
+         *
+         * settledPage 只在停稳那一下变一次，而那一刻 isScrollInProgress 往往还是 true；
+         * 过滤掉之后它不会再变，于是这一页永远轮不到写进选择里 —— 界面上就是
+         * 「滑回来不亮、也不显示在用」。把手势状态一起放进被观察的值里，
+         * 它变回 false 时这一对值又变了一次，落点这才补上。
+         */
+        snapshotFlow { pager.settledPage to pager.isScrollInProgress }.collect { (idx, moving) ->
+            if (moving) return@collect
             val v = pool.getOrNull(idx) ?: return@collect
             use(v)
         }
@@ -340,7 +354,7 @@ fun VoiceScreen(
                             Text("·", fontSize = 11.sp, color = skin.hair)
                             Spacer(Modifier.width(7.dp))
                             Text(
-                                "在用 " + AutoCast.resolve(pool, s.engines, s.defaultVoice, true).ifBlank { "未设置" },
+                                "在用 " + currentName.ifBlank { "未设置" },
                                 fontSize = 11.sp, color = skin.flame
                             )
                         }
@@ -370,7 +384,8 @@ fun VoiceScreen(
                             CardVoice(
                                 v = v,
                                 on = v.id == currentId,
-                                playing = playing == v.id,
+                                playing = Audition.playingId == v.id,
+                                loading = hearing == v.id,
                                 engines = s.engines,
                                 onSay = { say(v) },
                                 onUse = { pick(v) },
@@ -438,7 +453,8 @@ fun VoiceScreen(
                                     VoiceRow(
                                         v = v,
                                         on = v.id == currentId,
-                                        playing = playing == v.id,
+                                        playing = Audition.playingId == v.id,
+                                        loading = hearing == v.id,
                                         engines = s.engines,
                                         onUse = { pick(v) },
                                         onSay = { say(v) },
@@ -817,6 +833,8 @@ private fun CardVoice(
     v: Voice,
     on: Boolean,
     playing: Boolean,
+    /** 正在合成这一副。合成要几秒，这几秒里不能装成「正在播」。 */
+    loading: Boolean,
     engines: List<com.pagefold.reader.field.EngineCfg>,
     onSay: () -> Unit,
     onUse: () -> Unit,
@@ -902,18 +920,26 @@ private fun CardVoice(
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
-                    ) { onSay() }
+                    ) { if (!loading) onSay() }
                     .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    if (playing) "■" else "▶",
+                    when {
+                        loading -> "…"
+                        playing -> "■"
+                        else -> "▶"
+                    },
                     fontSize = 7.sp,
                     color = if (playing) s.ground else s.flame,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    if (playing) "停" else "试听",
+                    when {
+                        loading -> "合成中"
+                        playing -> "停"
+                        else -> "试听"
+                    },
                     fontSize = 11.sp,
                     color = if (playing) s.ground else s.flame,
                 )
@@ -953,6 +979,7 @@ private fun VoiceRow(
     v: Voice,
     on: Boolean,
     playing: Boolean,
+    loading: Boolean,
     engines: List<com.pagefold.reader.field.EngineCfg>,
     onUse: () -> Unit,
     onSay: () -> Unit,
@@ -1014,11 +1041,17 @@ private fun VoiceRow(
         Box(
             Modifier.size(32.dp).clip(CircleShape)
                 .border(1.dp, s.hairSoft, CircleShape)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onSay() },
+                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                    if (!loading) onSay()
+                },
             contentAlignment = Alignment.Center
         ) {
             Text(
-                if (playing) "■" else "▶",
+                when {
+                    loading -> "…"
+                    playing -> "■"
+                    else -> "▶"
+                },
                 fontSize = 9.sp, color = if (playing) s.flame else s.inkDim,
                 textAlign = TextAlign.Center
             )
@@ -1504,25 +1537,22 @@ internal fun TuneRows(
                     Ruler(
                         "语速", draft.speed.toFloat(), 50f, 200f, 5f,
                         { onChange(draft.copy(speed = it.roundToInt())) },
-                        unit = "%", low = "50", high = "200",
-                        hint = "100 是这副音色自己的原速。书里那颗倍速在这之上再乘。"
+                        low = "0.5×", high = "2.0×",
+                        format = { "%.2f×".format(it / 100f) }
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.PITCH)) {
                     Ruler(
                         "音调", draft.pitch.toFloat(), 50f, 200f, 5f,
                         { onChange(draft.copy(pitch = it.roundToInt())) },
-                        unit = "%", low = "50", high = "200",
-                        hint = "100 是这副音色本来的调。往上更亮，往下更沉。"
+                        unit = "%", low = "低", high = "高",
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.VOLUME)) {
                     Ruler(
                         "音量", draft.volume.toFloat(), 50f, 200f, 5f,
                         { onChange(draft.copy(volume = it.roundToInt())) },
-                        unit = "%", low = "50", high = "200",
-                        hint = if (proto == "speech") "这一家按分贝算，100 是原音量，最多上下 10 dB。"
-                        else "100 是原音量。"
+                        unit = "%",
                     )
                 }
             }
@@ -1544,24 +1574,21 @@ internal fun TuneRows(
                     Ruler(
                         "低沉 ↔ 明亮", draft.bright.toFloat(), 0f, 200f, 5f,
                         { onChange(draft.copy(bright = it.roundToInt())) },
-                        unit = "", low = "更沉", high = "更亮",
-                        hint = "100 不动。往左更低沉，往右更明亮。"
+                        low = "更沉", high = "更亮",
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.SOFT)) {
                     Ruler(
                         "刚劲 ↔ 轻柔", draft.soft.toFloat(), 0f, 200f, 5f,
                         { onChange(draft.copy(soft = it.roundToInt())) },
-                        unit = "", low = "更刚", high = "更柔",
-                        hint = "100 不动。往左力量感更足，往右更软。"
+                        low = "更刚", high = "更柔",
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.CLEAR)) {
                     Ruler(
                         "浑厚 ↔ 清脆", draft.clear.toFloat(), 0f, 200f, 5f,
                         { onChange(draft.copy(clear = it.roundToInt())) },
-                        unit = "", low = "更厚", high = "更脆",
-                        hint = "100 不动。往左更浑厚，往右更清脆。"
+                        low = "更厚", high = "更脆",
                     )
                 }
             }
@@ -1575,8 +1602,7 @@ internal fun TuneRows(
                 Ruler(
                     "采样温度", draft.temp.toFloat(), 0f, 100f, 5f,
                     { onChange(draft.copy(temp = it.roundToInt())) },
-                    unit = "", low = "0.00", high = "1.00",
-                    hint = "越低越稳，越高同一段字每次念得越不一样。",
+                    low = "0.00", high = "1.00",
                     format = { "%.2f".format(it / 100f) }
                 )
             }
@@ -1668,7 +1694,6 @@ internal fun TuneRows(
                     "念完留多久", draft.silence.toFloat(), 0f, 3000f, 100f,
                     { onChange(draft.copy(silence = it.roundToInt())) },
                     unit = "ms", low = "0", high = "3000",
-                    hint = "每一段念完之后空这么久。0 是不多留。"
                 )
             }
         }
@@ -1714,14 +1739,9 @@ private fun VoiceTuneSheet(
     val model = modelOf(v, s.engines)
     val knobs = com.pagefold.reader.field.Caps.of(proto, model, v.kind)
 
+    // 没调过这一副，就从它自己的原速起 —— 不跟读书页的倍速。
     val saved = remember(v.id) {
-        if (app.vtune.has(v.id)) app.vtune.of(v.id)
-        else com.pagefold.reader.field.Vt(
-            speed = s.speed.coerceIn(50, 200),
-            pitch = s.pitch.coerceIn(50, 200),
-            volume = 100,
-            mood = "",
-        )
+        if (app.vtune.has(v.id)) app.vtune.of(v.id) else com.pagefold.reader.field.Vt()
     }
     var cur by remember(v.id) { mutableStateOf(saved) }
     val dirty = cur != saved
@@ -1733,15 +1753,15 @@ private fun VoiceTuneSheet(
      * 念的是手上这份（[one]），不用存。
      */
     val scope = rememberCoroutineScope()
-    var playing by remember(v.id) { mutableStateOf(Audition.isOn(v.id)) }
+    val playing = Audition.isOn(v.id)
+    var hearing by remember(v.id) { mutableStateOf(false) }
     fun hear() {
         if (Audition.isOn(v.id)) {
             Audition.stop()
-            playing = false
             return
         }
         scope.launch {
-            playing = true
+            hearing = true
             val line = "这一段，念给你听。"
             val clip = withContext(Dispatchers.IO) {
                 runCatching {
@@ -1750,12 +1770,9 @@ private fun VoiceTuneSheet(
                     app.synth.make(s, v, line, read, one = cur)
                 }.getOrNull()
             }
-            if (clip == null) {
-                playing = false
-                return@launch
-            }
-            val ok = Audition.play(v.id, clip.file.absolutePath) { playing = false }
-            playing = ok
+            hearing = false
+            if (clip == null) return@launch
+            Audition.play(v.id, clip.file.absolutePath)
         }
     }
 
@@ -1806,7 +1823,11 @@ private fun VoiceTuneSheet(
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Btn(
-                    if (playing) "停" else "试听",
+                    when {
+                        hearing -> "合成中"
+                        playing -> "停"
+                        else -> "试听"
+                    },
                     { hear() },
                     BtnKind.GHOST,
                     modifier = Modifier.weight(1f)

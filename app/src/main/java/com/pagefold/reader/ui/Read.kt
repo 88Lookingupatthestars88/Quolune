@@ -127,6 +127,7 @@ import com.pagefold.reader.kit.Glyph
 import com.pagefold.reader.App
 import com.pagefold.reader.book.BookMeta
 import com.pagefold.reader.book.Cast
+import com.pagefold.reader.book.Ban
 import com.pagefold.reader.book.CastProfile
 import com.pagefold.reader.book.Chapter
 import com.pagefold.reader.book.Chapters
@@ -1821,6 +1822,32 @@ private fun profileOf(app: App, book: BookMeta, s: Settings): CastProfile {
     val pool = Catalog.ours(s.engines, app.box.custom(), emptyList())
     val narWant = cb?.narrator?.ifBlank { s.narratorVoice } ?: s.narratorVoice
     val diaWant = cb?.dialog?.ifBlank { s.defaultVoice } ?: s.defaultVoice
+    /*
+     * 引擎认谁：勾上的名单 + 角色自己的名字。两边并起来，免得「勾了没建角色」这一段
+     * 和「建了角色没勾」那一段互相看不见。
+     */
+    val known = LinkedHashSet<String>()
+    val canon = LinkedHashMap<String, String>()
+    cb?.pool?.filter { it.on }?.forEach { n ->
+        known += n.name
+        n.alt.forEach { if (it.isNotBlank()) { known += it; canon[it] = n.name } }
+    }
+    cb?.roles?.forEach { r ->
+        if (r.name.isNotBlank()) {
+            known += r.name
+            r.alt.forEach { if (it.isNotBlank()) { known += it; canon[it] = r.name } }
+        }
+    }
+    val ban = if (known.isEmpty()) null else Ban(
+        names = known,
+        gender = cb?.sex.orEmpty(),
+        packs = cb?.packs.orEmpty(),
+        extraVerb = cb?.extraVerb.orEmpty(),
+        extraAdv = cb?.extraAdv.orEmpty(),
+        extraTitle = cb?.extraTitle.orEmpty(),
+        off = cb?.off.orEmpty(),
+        canon = canon,
+    )
     return CastProfile(
         narratorVoice = AutoCast.resolve(pool, s.engines, narWant, dialog = false),
         defaultVoice = AutoCast.resolve(pool, s.engines, diaWant, dialog = true),
@@ -1828,6 +1855,8 @@ private fun profileOf(app: App, book: BookMeta, s: Settings): CastProfile {
         dialogStyle = cb?.dialogStyle?.ifBlank { s.dialogStyle } ?: s.dialogStyle,
         rules = cb?.active().orEmpty(),
         voices = cb?.roles?.filter { it.voice.isNotBlank() }?.associate { it.name to it.voice }.orEmpty(),
+        styles = cb?.roles?.filter { it.style.isNotBlank() }?.associate { it.name to it.style }.orEmpty(),
+        ban = ban,
     )
 }
 

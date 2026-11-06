@@ -122,7 +122,8 @@ fun StoreScreen(
     var rows by remember { mutableStateOf<List<Piece>>(emptyList()) }
     var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
     var gen by remember { mutableStateOf(0) }
-    var playing by remember { mutableStateOf<String?>(null) }
+    // 谁在响只有 Audition 知道。这里跟着它走，不另存一份。
+    val playing = Audition.playingId
     var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -138,10 +139,7 @@ fun StoreScreen(
 
     fun wipe(ids: Set<String>) {
         if (ids.isEmpty()) return
-        if (playing != null && ids.contains(playing)) {
-            Audition.stop()
-            playing = null
-        }
+        if (playing != null && ids.contains(playing)) Audition.stop()
         val jobs = ids.mapNotNull { id -> rows.firstOrNull { it.id == id } }
         picked = picked - ids
         scope.launch {
@@ -268,14 +266,9 @@ fun StoreScreen(
                             onPlay = {
                                 if (playing == p.id) {
                                     Audition.stop()
-                                    playing = null
                                 } else {
                                     p.play?.let { path ->
-                                        if (Audition.play(p.id, path) { playing = null }) {
-                                            playing = p.id
-                                        } else {
-                                            msg = "这段解不开"
-                                        }
+                                        if (!Audition.play(p.id, path)) msg = "这段解不开"
                                     }
                                 }
                             }

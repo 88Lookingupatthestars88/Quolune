@@ -109,7 +109,7 @@ fun LibraryScreen(
         scope.launch {
             val r = withContext(Dispatchers.IO) { importBook(app, uri) }
             busy = null
-            if (r.first != null) {
+            if (r.first) {
                 books = app.shelf.all()
                 err = null
             } else {
@@ -734,6 +734,8 @@ private fun importBook(app: App, uri: Uri): Pair<Boolean, String?> {
             tuneJson = com.pagefold.reader.field.Tune.snapshot(app.field.now),
         )
         app.shelf.add(meta)
+        // 收进来就派下去数人，不用等用户点。数完是它自己写回这本书的配置。
+        com.pagefold.reader.book.Counts.ensure(app, meta)
         true to null
     } catch (e: Exception) {
         false to (e.message ?: e.javaClass.simpleName)

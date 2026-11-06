@@ -769,6 +769,17 @@ fun Ruler(
     LaunchedEffect(held) { if (!grip) live = held }
     val shown = if (grip) live else held
 
+    /*
+     * 手势块里要用的两个值，都走 rememberUpdatedState。
+     *
+     * 直接把它们写进 pointerInput 的 key 里是错的：外面每重组一次，
+     * 那两个 lambda / 数字就是新的，pointerInput 会把正在跑的手势协程取消重建，
+     * 手指刚拖出第一格就断，看着像「拖到一半自己弹回去」。
+     * key 固定成 Unit，值用最新的，两边都不误。
+     */
+    val heldNow = rememberUpdatedState(held)
+    val changeNow = rememberUpdatedState(onChange)
+
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(label, fontSize = 14.sp, color = s.ink)
@@ -808,7 +819,7 @@ fun Ruler(
                     // 整条都能按：横着推一下就接手，一路跟到抬手；竖着推就还给列表。
                     // 光按一下不挪 = 跳到那一格。这样既不误触，也不用非得揪住小圆点。
                     Box(
-                        Modifier.fillMaxSize().pointerInput(min, max, step, span) {
+                        Modifier.fillMaxSize().pointerInput(Unit) {
                             val gripPx = gripDp.toPx()
                             val slop = viewConfiguration.touchSlop
 
@@ -849,15 +860,15 @@ fun Ruler(
                                 }
 
                                 if (mode == 2) {
-                                    live = held
-                                } else {
-                                    if (mode == 0) {
-                                        // 点数：按哪儿跳哪儿
-                                        grip = true
-                                        live = valueAt(endX)
-                                    }
+                                    live = heldNow.value
+                                } else if (mode == 1) {
                                     grip = false
-                                    onChange(live)
+                                    changeNow.value(live)
+                                } else {
+                                    // 只按没拖：不改数。
+                                    // 整条都能接手横拖，所以「按一下跳过去」没有必要；
+                                    // 留着它，想微调时按在圆点边上，值会跳到手指那儿。
+                                    grip = false
                                 }
                             }
                         }

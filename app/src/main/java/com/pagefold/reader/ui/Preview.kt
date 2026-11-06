@@ -104,7 +104,6 @@ fun PreviewScreen(
     var style by remember { mutableStateOf(s.style) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
-    var playing by remember { mutableStateOf(Audition.playingId != null) }
 
     /*
      * 这一页也能改这副嗓子怎么念。
@@ -115,6 +114,8 @@ fun PreviewScreen(
      */
     var rev by remember { mutableStateOf(0) }
     val probe = pick
+    // 播没播上，由 Audition 说了算。这一页不再自己存一份。
+    val playing = probe != null && Audition.playingId == probe.id
     val proto = probe?.let { protoOf(it, s.engines) }.orEmpty()
     val model = probe?.let { modelOf(it, s.engines) }.orEmpty()
     val knobs = if (probe == null) emptyList() else com.pagefold.reader.field.Caps
@@ -122,12 +123,7 @@ fun PreviewScreen(
         .filter { it != com.pagefold.reader.field.Knob.MOOD }
     val savedTune = remember(probe?.id, s.speed, s.pitch, rev) {
         if (probe != null && app.vtune.has(probe.id)) app.vtune.of(probe.id)
-        else com.pagefold.reader.field.Vt(
-            speed = s.speed.coerceIn(50, 200),
-            pitch = s.pitch.coerceIn(50, 200),
-            volume = 100,
-            mood = "",
-        )
+        else com.pagefold.reader.field.Vt()
     }
     var draft by remember(probe?.id, rev) { mutableStateOf(savedTune) }
     val tuneDirty = draft != savedTune
@@ -139,7 +135,6 @@ fun PreviewScreen(
 
     fun stop() {
         Audition.stop()
-        playing = false
     }
 
     // 试听不随页面销毁 —— 切到别的页照样念完
@@ -163,9 +158,7 @@ fun PreviewScreen(
             }
             busy = false
             if (clip == null) return@launch
-            val ok = Audition.play(v.id, clip.file.absolutePath) { playing = false }
-            playing = ok
-            if (!ok) err = "声音存下来了，播放器解不开这一段"
+            if (!Audition.play(v.id, clip.file.absolutePath)) err = "声音存下来了，播放器解不开这一段"
         }
     }
 

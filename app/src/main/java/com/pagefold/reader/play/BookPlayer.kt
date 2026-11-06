@@ -640,11 +640,11 @@ class BookPlayer : Service() {
                         val after = if (fwd == 0) null else
                             lines.subList(i + 1, (i + 1 + fwd).coerceAtMost(lines.size))
                                 .joinToString(" ") { it.text }.ifBlank { null }
-                        // 旁白一个调门、对白一个调门，各自为空才跟全局。
-                        // 旁白、对白各自的调门，各自为空才回落到全局。
-                        val lineStyle =
+                        // 这一句自己带了调门就用它的（角色上配的），没带才按旁白/对白那档。
+                        val lineStyle = line.style.ifBlank {
                             if (line.isDialog) live.dialogStyle.trim()
                             else live.narratorStyle.trim()
+                        }
                         val read: Reading = runCatching {
                             Cue.of(
                                 line.text,
@@ -709,7 +709,9 @@ class BookPlayer : Service() {
                     lines.getOrNull(i + 1)?.text,
                     live.style,
                     !live.cue,
-                    if (line.isDialog) live.dialogStyle.trim() else live.narratorStyle.trim(),
+                    line.style.ifBlank {
+                        if (line.isDialog) live.dialogStyle.trim() else live.narratorStyle.trim()
+                    },
                 )
 
                 val clip: Clip? = try {
