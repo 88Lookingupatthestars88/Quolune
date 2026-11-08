@@ -30,7 +30,16 @@ object Counts {
 
     private val state = ConcurrentHashMap<String, Int>()
     private val pool = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "quolune-count").apply { isDaemon = true }
+        /*
+         * 数人的时候要让出 CPU。
+         *
+         * 一千万字的书要跑七八秒，线程按默认优先级抢，主线程的点击和滚动就会顿住 ——
+         * 用户看到的是「加完组要等好几秒才出来」。压到最低优先级，它只在没人用它的时候跑。
+         */
+        Thread(r, "quolune-count").apply {
+            isDaemon = true
+            priority = Thread.MIN_PRIORITY
+        }
     }
     private val scope = CoroutineScope(SupervisorJob() + pool.asCoroutineDispatcher())
 
@@ -73,23 +82,46 @@ object Counts {
             try {
                 val raw = app.shelf.read(id)
                 if (!raw.isNullOrBlank()) {
-                    val list = Look.speakers(raw, 120)
+                    val list = Look.speakers(raw, 400)
                     val custom = Look.customs(raw)
                     if (list.isNotEmpty()) {
                         val fresh = app.shelf.find(id) ?: meta
                         val cur = castOf(app, fresh)
                         /*
-                         * 只补不删。
-                         *
-                         * 已经勾过的保持勾着、写过的叫法留着；名单里没有的那些也留着 ——
-                         * 手写加的人、上一份配置带进来的人，都不在这次数出来的结果里，
-                         * 整个盖掉的话，点一下重新数自己建的人就没了。
+                         * 勾选状态和叫法按名字带过去：重数不该把用户挑过的勾掉。
                          */
                         val old = cur.pool.associateBy { it.name }
-                        val marked = list.map { n ->
-                            n.copy(on = old[n.name]?.on ?: true, alt = old[n.name]?.alt.orEmpty())
-                        } + cur.pool.filter { p -> list.none { it.name == p.name } }
-                        val next = cur.copy(pool = marked, extraVerb = custom.first, extraAdv = custom.second)
+                        val seen = HashSet<String>(list.size * 2)
+                        val marked = ArrayList<CastName>(list.size + cur.pool.size)
+                        list.forEach { n ->
+                            if (!seen.add(n.name)) return@forEach
+                            marked += n.copy(
+                                on = old[n.name]?.on ?: true,
+                                alt = old[n.name]?.alt.orEmpty(),
+                            )
+                        }
+                        /*
+                         * 旧名单里没数到的人，只有「用户配过嗓子/写进角色表」的才留。
+                         *
+                         * 不这么限的话，上一版数出来的「嘶哑」「没好气」「肩膀」因为默认
+                         * 勾着会被一直带下去 —— 换了算法也清不掉，用户看到的就是「规则
+                         * 改了没用」。
+                         */
+                        val kept = HashSet<String>(cur.roles.size * 4)
+                        /* 组员也算「配过嗓子的人」：并进组里的那些人不在名单上，句数会跟着丢。 */
+                        cur.roles.forEach { r -> kept.add(r.name); r.alt.forEach { kept.add(it) } }
+                        cur.pool.forEach { p ->
+                            if (p.name.isBlank() || p.name !in kept || !seen.add(p.name)) return@forEach
+                            marked += p
+                        }
+                        /* 名单整份换掉：老版本混进来的噪音不留。 */
+                        val next = cur.copy(
+                            pool = marked,
+                            extraVerb = custom.first,
+                            extraAdv = custom.second,
+                            extraTitle = emptyList(),
+                            sex = cur.sex.filterKeys { n -> marked.any { it.name == n } },
+                        )
                         app.shelf.setCast(id, RuleCodec.toJson(next))
                         end = DONE
                     }

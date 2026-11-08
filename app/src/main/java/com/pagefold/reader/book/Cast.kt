@@ -360,9 +360,12 @@ object RuleCodec {
                  * 名单空着就照角色表补一份，全部勾上 —— 人是他自己配好的，不用再挑。
                  */
                 if (withRoles.pool.isEmpty() && withRoles.roles.isNotEmpty()) {
-                    withRoles.copy(
-                        pool = withRoles.roles.map { CastName(it.name, 0, on = true, alt = it.alt) },
-                    )
+                    // 同上：名单要写全，勾只给单人角色。
+                    val p = ArrayList<CastName>(withRoles.roles.size * 2)
+                    withRoles.roles.forEach { r ->
+                        r.ways().forEach { n -> p.add(CastName(n, 0, on = n == r.name && r.alt.isEmpty())) }
+                    }
+                    withRoles.copy(pool = p)
                 } else withRoles
             }
         }
@@ -475,7 +478,14 @@ object RuleCodec {
                     if (ways.isNotEmpty()) {
                         val name = ways.first()
                         roles.removeAll { it.name == name }
-                        roles.add(CastRole(name, voice, alt = ways.drop(1)))
+                        /*
+                         * 第一个是组名，alt 只装「组名以外的人」。
+                         *
+                         * 组名可能是人（「嬴政」），也可能只是个标签（「众臣」）——
+                         * 这件事在这里判不了，交给界面按名单查：名单里有这个名字，
+                         * 他就是人，人数加一、成员表里也要写上他。写进 alt 就会算两遍。
+                         */
+                        roles.add(CastRole(name, voice, alt = ways.drop(1).filter { it != name }))
                     }
                     return@forEach
                 }
@@ -494,7 +504,17 @@ object RuleCodec {
             roles.add(CastRole(head, rest))
         }
         // 名单：正名一行（勾上），别名不必各占一行 —— 别名在角色里，认人的时候一起编进去。
-        val pool = roles.map { CastName(it.name, 0, on = true, alt = it.alt) }
+        /*
+         * 名单里要写全所有名字 —— 组名、组员都写。
+         *
+         * 不写组员，列表算句数时查不到他（句数是从名单里按名字取的），整组就显示 0 句。
+         * 但勾只给单人角色：组员不单独占一行，勾着反而会让同一人出现两次。
+         */
+        val pool = ArrayList<CastName>(roles.size * 2)
+        roles.forEach { r ->
+            val all = r.ways()
+            all.forEach { n -> pool.add(CastName(n, 0, on = n == r.name && r.alt.isEmpty())) }
+        }
         return CastBook(narrator = nar, dialog = dia, roles = roles, pool = pool)
     }
 

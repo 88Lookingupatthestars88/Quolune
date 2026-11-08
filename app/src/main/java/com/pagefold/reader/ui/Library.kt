@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,6 +50,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -62,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pagefold.reader.kit.Glyph
 import com.pagefold.reader.App
+import com.pagefold.reader.R
 import com.pagefold.reader.book.BookMeta
 import com.pagefold.reader.book.Parse
 import com.pagefold.reader.field.Settings
@@ -486,8 +489,13 @@ private fun BookTile(b: BookMeta, reading: Boolean, onOpen: () -> Unit, onHold: 
 }
 
 /**
- * 封面。用户换过就用他那张；没换过就按书名生成一块布面：
- * 色相从书名散列来，饱和度压到 0.2 上下，四套主题里都不抢戏。
+ * 封面。用户换过就用他那张；没换过就现画一块纸。
+ *
+ * 现画的好处是任何尺寸都清楚：书格是 150×210，接着听那条是 52×70，
+ * 同一张位图缩到后者只剩一块色，字全糊了。字是排出来的，缩到多小都认得。
+ *
+ * 版式只做三件事：书名、作者、一圈极细的框。左上一点朱。
+ * 不加纹理、不加渐变、不加阴影 —— 那些正是让封面看着像二十年前的东西。
  */
 @Composable
 private fun Cover(b: BookMeta, modifier: Modifier) {
@@ -501,7 +509,7 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
             }.getOrNull()
         }
         if (bmp != null) {
-            Box(modifier.clip(RoundedCornerShape(6.dp)).background(s.panelSink)) {
+            Box(modifier.clip(RoundedCornerShape(3.dp)).background(s.panelSink)) {
                 androidx.compose.foundation.Image(
                     bitmap = bmp, contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
@@ -513,69 +521,195 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
         }
     }
 
-    val seed = abs(b.title.hashCode())
-    val hue = (seed % 360).toFloat()
-    val top = Color.hsl(hue, 0.22f, if (s.dark) 0.30f else 0.88f)
-    val bottom = Color.hsl(hue, 0.26f, if (s.dark) 0.20f else 0.76f)
-    Box(
-        modifier.clip(RoundedCornerShape(6.dp))
-            .background(Brush.verticalGradient(listOf(top, bottom)))
-    ) {
+    /* 封面是一张纸，不随四套主题变深变浅 —— 只分明暗两档。 */
+    val paper = if (s.dark) Color(0xFF211E1A) else Color(0xFFF4EEE2)
+    val ink = if (s.dark) Color(0xFFE6DECD) else Color(0xFF2A231B)
+    val grey = if (s.dark) Color(0xFF8D8578) else Color(0xFF8B7D68)
+    val seal = if (s.dark) Color(0xFFA8452F) else Color(0xFF9C3B2B)
+
+    BoxWithConstraints(modifier.clip(RoundedCornerShape(3.dp)).background(paper)) {
+        val w = maxWidth.value
+        val h = maxHeight.value
+        /* 92 是「接着听」那条的小格。小于它就不摆朱点和作者。 */
+        val mini = w < 92f
+
         Box(
-            Modifier.fillMaxSize().padding(7.dp)
-                .border(0.6.dp, s.ink.copy(alpha = 0.10f), RoundedCornerShape(3.dp))
+            Modifier.fillMaxSize().padding(if (mini) 3.dp else (w * 0.06f).dp)
+                .border(0.7.dp, ink.copy(alpha = 0.13f))
         )
-        // 封面上写书名，下面一行作者。
-        //
-        // 只印第一个字认不出是哪本。也不把整段话塞进去：书名一行、作者一行，
-        // 字号按格子让一步，让到排得下为止。
-        val raw = b.title.trim().ifBlank { "无题" }
-        // 「作者：」在书名里是另一个字段，不该跟书名混在一行。
-        val cut = raw.indexOf("作者")
-        val head = if (cut > 2) raw.substring(0, cut).trim().trimEnd('，', ',', ' ', '　') else raw
-        val who = if (cut > 2) raw.substring(cut).trim() else ""
-        Column(
-            Modifier.fillMaxWidth().align(Alignment.Center)
-                .padding(horizontal = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val availW = maxWidth.value
-                val availH = maxHeight.value * 0.66f
-                var fs = 17f
-                while (fs > 8f) {
-                    val perLine = (availW / fs).toInt().coerceAtLeast(1)
-                    val lines = (head.length + perLine - 1) / perLine
-                    if (lines * fs * 1.34f <= availH) break
-                    fs -= 0.5f
+        if (!mini && w > 0f && h > 0f) {
+            Box(
+                Modifier.padding(start = (w * 0.145f).dp, top = (h * 0.075f).dp)
+                    .size((w * 0.036f).coerceIn(3.5f, 9f).dp)
+                    .background(seal)
+            )
+        }
+
+        if (w > 0f && h > 0f) {
+            val raw = b.title.trim()
+            val cut = raw.indexOf("作者")
+            val head = if (cut > 2) raw.substring(0, cut).trim().trimEnd('，', ',', ' ', '\u3000') else raw
+            val who = if (cut > 2) raw.substring(cut + 2).trimStart('：', ':', ' ', '\u3000') else ""
+
+            /*
+             * 「大秦：开局扶苏被贬，忽悠他造反」这种两段式书名：
+             * 冒号前那一截是系列名，排成一行小字当眉标；后面那截才是这本的书名。
+             * 小格放不下两层，整串一起排。
+             */
+            val series = if (mini) null else seriesOf(head)
+            val main = if (series != null) head.substring(series.length + 1) else head
+
+            val boxW = w * 0.72f
+            val cap = h * (if (mini) 0.70f else 0.46f)
+            val maxRows = if (mini) 4 else 3
+            val maxFs = if (mini) 13f else 22f
+            val minFs = maxFs * 0.55f
+
+            /*
+             * 几行怎么定：
+             *   先试一行。这一行只要不算小（≥ 上限的七成），就用一行 ——
+             *   「极品万岁爷」排成「极品万岁 / 爷」比排成一整行难看十倍。
+             *   一行太小，才两行、三行往上加，加到字号够为止。
+             */
+            var fs = minOf(boxW / main.length.coerceAtLeast(1), maxFs)
+            var lines: List<String> = listOf(main)
+            if (fs < maxFs * 0.7f) {
+                var got = false
+                for (rows in 2..maxRows) {
+                    val per = (main.length + rows - 1) / rows
+                    val f = minOf(boxW / per, cap / (rows * 1.28f), maxFs)
+                    if (f >= minFs) {
+                        fs = f
+                        lines = fitTitle(main, per)
+                        got = true
+                        break
+                    }
                 }
-                Text(
-                    head,
-                    fontSize = fs.sp,
-                    lineHeight = (fs * 1.34f).sp,
-                    color = s.ink.copy(alpha = 0.62f),
-                    fontFamily = FontFamily.Serif,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (!got) {
+                    fs = minFs
+                    lines = hardWrap(main, (boxW / minFs).toInt().coerceAtLeast(1))
+                }
             }
-            if (who.isNotBlank()) {
-                Spacer(Modifier.height(7.dp))
-                Text(
-                    who,
-                    fontSize = 9.sp,
-                    color = s.ink.copy(alpha = 0.34f),
-                    fontFamily = FontFamily.Serif,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+
+            /* 眉标只是标记这是哪一套，比书名小一半，颜色退一档。 */
+            val sFs = if (series != null) minOf(fs * 0.46f, boxW / series.length) else 0f
+
+            /* 竖着排完的总高，超了就把字号按比例收回。 */
+            val need = (if (sFs > 0f) sFs * 1.34f else 0f) + lines.size * fs * 1.28f
+            if (need > cap) {
+                val k = cap / need
+                fs *= k
+            }
+
+            Column(
+                Modifier.fillMaxSize().padding(
+                    start = (w * 0.11f).dp, end = (w * 0.11f).dp,
+                    top = (h * 0.05f).dp, bottom = (h * 0.05f).dp,
+                ),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (sFs > 0f) {
+                    Text(
+                        series.orEmpty(),
+                        fontSize = sFs.sp,
+                        lineHeight = (sFs * 1.18f).sp,
+                        color = grey,
+                        fontFamily = FontFamily.Serif,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.height((sFs * 0.34f).dp))
+                }
+                lines.forEach { ln ->
+                    Text(
+                        ln,
+                        fontSize = fs.sp,
+                        lineHeight = (fs * 1.28f).sp,
+                        color = ink,
+                        fontFamily = FontFamily.Serif,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                    )
+                }
+                if (!mini && who.isNotBlank()) {
+                    Spacer(Modifier.height((fs * 1.05f).dp))
+                    Text(
+                        who.take(12),
+                        fontSize = (fs * 0.42f).coerceAtLeast(6f).sp,
+                        color = grey,
+                        fontFamily = FontFamily.Serif,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         ProgressLine(b)
     }
+}
+
+/** 书名里冒号前面那一小截是系列名（「大秦：」「斗罗大陆：」），四字以内才算。 */
+private fun seriesOf(t: String): String? {
+    val i = t.indexOf('：')
+    if (i in 1..4) return t.substring(0, i)
+    val j = t.indexOf(':')
+    if (j in 1..4) return t.substring(0, j)
+    return null
+}
+
+/**
+ * 按宽度断行。优先在标点后断开，行首不留标点。
+ *
+ * [per] 是这一行最多放几个汉字。中文一个字就是一个字宽，所以按字数估足够准。
+ */
+/**
+ * 断行，但保证每一行都不超过 [per] 个字。
+ *
+ * 标点回退会让某一行多出一两个字（「开局扶苏被贬，」正好六个字一行），
+ * 大格子里那样更好看；小格子只有 52dp 宽，多一个字就顶出框外，所以这里再兜一次：
+ * 有行超了，就整首按字数硬切。
+ */
+private fun fitTitle(t: String, per: Int): List<String> {
+    val ls = wrapTitle(t, per)
+    return if (ls.any { it.length > per }) hardWrap(t, per) else ls
+}
+
+/** 按字数硬切，不看标点。 */
+private fun hardWrap(t: String, per: Int): List<String> {
+    val out = ArrayList<String>(4)
+    var i = 0
+    while (i < t.length) {
+        val e = minOf(i + per, t.length)
+        val piece = t.substring(i, e)
+            .trimStart('，', '。', '、', '；', '：', ' ')
+            .trimEnd('，', '、', '；', ' ')
+        if (piece.isNotEmpty()) out.add(piece)
+        i = e
+    }
+    return if (out.isEmpty()) listOf(t) else out
+}
+
+private fun wrapTitle(t: String, per: Int): List<String> {
+    val out = ArrayList<String>(4)
+    var i = 0
+    val n = t.length
+    while (i < n) {
+        /* 往后多看两个字：标点常常刚好落在这一行的下一个字上。 */
+        val hi = minOf(i + per + 2, n)
+        var e = -1
+        var k = hi
+        while (k > i + 1) {
+            if (t[k - 1] in "，。！？、：；·") { e = k; break }
+            k--
+        }
+        if (e < 0) e = minOf(i + per, n)
+        var piece = t.substring(i, e)
+        piece = piece.trimStart('，', '。', '、', '；', '：', ' ')
+            .trimEnd('，', '、', '；', ' ')
+        if (piece.isNotEmpty()) out.add(piece)
+        i = e
+    }
+    return if (out.isEmpty()) listOf(t) else out
 }
 
 @Composable

@@ -256,11 +256,48 @@ object Look {
         )
     }
 
+    /** 段首常出现的词，看着像名字其实不是。 */
+    private val STOPMORE: Set<String> by lazy {
+        setOf(
+            "不由", "不由自", "一旁", "时候", "想到", "听到", "看到", "说完", "说罢", "许久", "半晌",
+            "肩膀", "不由", "一会", "片刻", "一时", "一阵", "一声", "一句", "一名", "一位", "一个",
+            "两人", "三人", "众人", "有人", "那人", "此人", "对方", "大家", "别人", "所有人",
+            "话音", "语毕", "说到", "说着", "说到这", "这时", "那时", "当下", "随即", "接着", "随后",
+            "至于", "关于", "由于", "于是", "总之", "反正", "果然", "竟然", "居然", "自然", "当然",
+            "原来", "本来", "后来", "起初", "起初", "终于", "到底", "毕竟", "难道", "岂不", "如何",
+            "少年", "少女", "老者", "老头", "老太", "中年", "青年", "男子", "女子", "男人", "女人",
+            // 情绪和表情。这些在段首一闪而过，后面接的全是动作，从来不是谁在说话。
+            "安慰", "疑惑", "惊喜", "惊讶", "愤怒", "无奈", "苦笑", "冷笑", "沉默", "犹豫", "迟疑",
+            "好奇", "紧张", "焦急", "尴尬", "得意", "冷笑", "恼火", "欣喜", "感叹", "感慨", "庆幸",
+            "无奈", "释然", "愕然", "恍然", "哑然", "骇然", "悻悻", "讪讪", "悻然", "愤然", "默然",
+            "另外", "其余", "其他", "别处", "远处", "近处", "四周", "周围", "附近", "当地", "各地",
+            "半空", "空中", "地上", "天上", "窗外", "门外", "屋内", "院里", "屋外", "身后", "面前",
+            "当下", "方才", "方才", "刚才", "刚刚", "立刻", "马上", "忽然", "忽然间", "转眼",
+            "总之", "毕竟", "到底", "究竟", "莫非", "难道", "岂能", "何尝", "何必", "如何",
+            "似乎", "仿佛", "好像", "大概", "大约", "或许", "也许", "显然", "分明", "明明",
+            /* 段首的状语。它们后面永远跟着动词，从来不是谁在说话。 */
+            "赶忙", "连忙", "急忙", "赶紧", "匆忙", "慌忙", "兴奋", "平人", "好一", "好半",
+            "一道", "一声", "一语", "一口", "一眼", "一手", "一头", "一边", "一同", "一贯",
+            "赞许", "赞叹", "感慨", "沉思", "沉吟", "思索", "想到", "想起", "觉得", "认为",
+        )
+    }
+
+    /**
+     * 名字不该以这些字收尾：它们是动词、虚词、方位词的字头。
+     *
+     * 「走到」「正在」「另外」「在看待」都是这么漏进来的 —— 段首那个 2–4 字串
+     * 看着像名字，其实是句子的谓语开头。
+     */
+    private const val VERBEND = "在到说看想去来走做有为把将被要会能该过成使给对从向于同和与及等道询呼赞喝斥责骂喊叫嚷吼叹念诵吟诉述议辩唤问应回答讲吩咐咐嘱喃咕嘟"
+
+    /** 名字不该以这些字收尾：身体、五官、神色。这堆后面必接名词，不是人。 */
+    private const val BODYEND = "脸眼手头声色气心身口鼻耳脚背眉腰腿臂"
+
     /** 名字里出现这些字就不是名字。 */
     private const val BAD = "是的了着也都就还又却而但可能要只直和与把被将个么什怎样此那这我你他她它们"
 
     /** 名字不该以这些字收尾。 */
-    private const val TAIL = "则的了着也都就还是没很又再才只并且或如若但却因所以于等被把将让使是有过与他她它们请讲不笑"
+    private const val TAIL = "则的了着地得也都就还是没很又再才只并且或如若但却因所以于等被把将使是有过与他她它们请讲不笑"
 
     /** 名字前面常粘着的介词。 */
     private const val LEAD = "对向朝和跟与被把给让从及同替为"
@@ -345,26 +382,59 @@ object Look {
 
     /** 名字和状语之间夹着的东西，加上它们本身都是词。 */
     private val dict: Dict by lazy {
-        Dict(Words.verbs.toSet() + Words.verbs1 + advSet + STOP)
+        Dict(Words.verbs.toSet() + Words.verbs1 + advSet + STOP + STOPMORE)
     }
 
     private val advDict: Dict by lazy { Dict(advSet) }
 
     /**
+     * 一个 2–5 字的串能不能当名字。
+     *
+     * 这里的每一条都是踩出来的：书里段首那个 2–4 字串可以是名字，也可以是副词、
+     * 情绪词、身体部位、谓语开头。判据只用词形，不认语义 —— 认语义就得有一张
+     * 永远补不完的表。
+     */
+    private fun cleanName(w: String): Boolean {
+        if (w.length < 2 || w.length > 5) return false
+        for (c in w) if (!han(c) || c in BAD) return false
+        if (w.last() in TAIL) return false
+        if (w.last() in VERBEND) return false
+        if (w.last() in BODYEND) return false
+        /* 「弱弱」「默默」「悻悻」：叠字是副词，没有人叫这个。 */
+        if (w[0] == w[1]) return false
+        /* 「鼻子」「眼睛」：两字、头一个字是身体部位，是名词不是人。 */
+        if (w.length == 2 && w[0] in BODYEND) return false
+        /* 动词、状语、停用词表里有的，一个都不留。 */
+        if (dict.has(w, 0, w.length)) return false
+        if (w in STOPMORE) return false
+        if (w in people) return true
+        if (Words.titles.contains(w) || Words.prons.contains(w)) return false
+        /* 「二人」「几位」：数量词，一张封闭的表就够了，不是打地鼠。 */
+        if (COUNT.matches(w)) return false
+        /*
+         * 「低声训」「急忙劝」「思索片刻」：砍掉最后一个字，前面那截是状语或动词 ——
+         * 那它自己就是「状语 + 动词」，不是名字。不靠表，靠结构。
+         */
+        if (w.length >= 3 && dict.has(w, 0, 2)) return false
+        if (w.length >= 3 && dict.has(w, 0, w.length - 1)) return false
+        return true
+    }
+
+    /**
      * 数这本书里有谁在说话。
      *
-     * 做法是「找动词、往回取名字」，不是「拿一张大正则扫全书」。
+     * 三件事分开做，判据全在「位置」：
      *
-     * 老写法把 179 个动词和 142 个状语拼成一条巨长的正则，再让它在三百万字里
-     * 反复回溯 —— 一本百万字的书要等好几十秒，用户等不到，看着就是「识别不出来」。
-     * 现在动词按首字分桶，每个位置只比对同首字的几个词；状语用查表、
-     * 名字往回只试 4/3/2 三个长度。整本书一遍过，不回溯，也不造垃圾。
-     *
-     * 名字的起点定在「前一个字不是汉字，或者是『的』」：
-     * 「卖豆腐的老李说」「那个来买旧书的男人说」这类句子，名字前面粘着一串修饰语，
-     * 只认标点边界的话整本书一个人都抽不出来 —— 这是《测试》只数出两个人的原因。
+     *   一、候选串。段首那 2–4 个汉字，切几字靠全书频次定 ——
+     *       「李谲安银」全书 1 次、「李谲安」34 次，落差就是名字的边界。
+     *   二、归属。一句对白只有一个说话人，所以按「句」算，不按「词」算。
+     *       中文是主谓宾，主语在**最后一个分句的最前面**，不是离引号最近的那个名词 ——
+     *       「扶苏走上前，关上房门，沉声道：“……”」里离引号最近的是「房门」，
+     *       但他不是人。老写法取最近的，于是「房门」「二人」「一丝」全进了名单。
+     *       现在取最后一个分句的第一个名字；那一段没有名字，才退回整句第一个。
+     *   三、合格。台词数 ≥3 才留。噪声词即使当过一次主语，也凑不到三句。
      */
-    fun speakers(text: String, max: Int = 120): List<CastName> {
+    fun speakers(text: String, max: Int = 400): List<CastName> {
         val n = text.length
         if (n < 64) return emptyList()
 
@@ -377,10 +447,23 @@ object Look {
             return false
         }
 
+        /*
+         * 说类动词。多字的也要看后面那个字 ——
+         * 不看的话「房门开口处」「众人解释道」里的「开口」「解释」会被当成有人在说话。
+         */
         fun verbAt(p: Int): Boolean {
             if (p >= n) return false
             val c = text[p]
-            verbBuckets[c]?.let { list -> if (list.any { text.startsWith(it, p) }) return true }
+            verbBuckets[c]?.forEach { v ->
+                if (text.startsWith(v, p)) {
+                    val q = p + v.length
+                    if (q >= n) return true
+                    val d = text[q]
+                    if (d in AFTER_VERB) return true
+                    if (verbBuckets[d] != null && verbBuckets[d]!!.any { text.startsWith(it, q) }) return true
+                    return false
+                }
+            }
             if (c in verbOne) {
                 val q = p + 1
                 return q >= n || text[q] in AFTER_VERB
@@ -388,132 +471,419 @@ object Look {
             return false
         }
 
-        // ── 第一遍：谁 + 状语{0,3} + 动词 ──
-        val said = HashMap<String, Int>(256)
+        // ── 一、段首 2/3/4 字的频次。名字切到第几个字，全看这张表。 ──
+        val p2 = HashMap<Int, Int>(1 shl 12)
+        val p3 = HashMap<Long, Int>(1 shl 12)
+        val p4 = HashMap<Long, Int>(1 shl 13)
         var i = 0
         while (i < n) {
+            if (i == 0 || text[i - 1] == '\n') {
+                var q = i
+                while (q < n && (text[q] == '\u3000' || text[q] == ' ' || text[q] == '\r')) q++
+                if (q + 1 < n && han(text[q]) && han(text[q + 1])) {
+                    val k2 = text[q].code shl 16 or text[q + 1].code
+                    p2[k2] = (p2[k2] ?: 0) + 1
+                    if (q + 2 < n && han(text[q + 2])) {
+                        val k3 = text[q].code.toLong() shl 32 or
+                            (text[q + 1].code.toLong() shl 16) or text[q + 2].code.toLong()
+                        p3[k3] = (p3[k3] ?: 0) + 1
+                        if (q + 3 < n && han(text[q + 3])) {
+                            val k4 = text[q].code.toLong() shl 48 or
+                                (text[q + 1].code.toLong() shl 32) or
+                                (text[q + 2].code.toLong() shl 16) or text[q + 3].code.toLong()
+                            p4[k4] = (p4[k4] ?: 0) + 1
+                        }
+                    }
+                }
+            }
+            i++
+        }
+
+        fun k3At(q: Int): Long = text[q].code.toLong() shl 32 or
+            (text[q + 1].code.toLong() shl 16) or text[q + 2].code.toLong()
+
+        fun k4At(q: Int): Long = text[q].code.toLong() shl 48 or
+            (text[q + 1].code.toLong() shl 32) or
+            (text[q + 2].code.toLong() shl 16) or text[q + 3].code.toLong()
+
+        /** 段首出现次数。跟 [cand] 分开记：cand 还混着「名字 + 动词」那一路。 */
+        val headN = HashMap<String, Int>(2048)
+
+        /**
+         * 段首那个串后面紧跟逗号的次数。
+         *
+         * 「同时，赵惊鸿道：」「甚至，……」—— 段首就断开，是状语在开场，不是主语。
+         * 真名段首后面跟的是动作，「季布抬头」「夏青笑道」，极少跟着逗号。
+         */
+        val headComma = HashMap<String, Int>(1024)
+
+        /** 段首那个名字有多长。0 = 不是名字。 */
+        fun headLen(q: Int): Int {
+            if (q + 1 >= n || !han(text[q]) || !han(text[q + 1])) return 0
+            val c2 = p2[text[q].code shl 16 or text[q + 1].code] ?: 0
+            if (c2 < 2) return 0
+            if (q + 2 >= n || !han(text[q + 2])) return 2
+            val c3 = p3[k3At(q)] ?: 0
+            if (c3 * 10 < c2 * 4) return 2
+            if (q + 3 >= n || !han(text[q + 3])) return 3
+            val c4 = p4[k4At(q)] ?: 0
+            return if (c4 * 10 >= c3 * 4) 4 else 3
+        }
+
+        // ── 二、候选池。段首那一段 + 「名字 + 状语{0,3} + 说类动词」那一路。 ──
+        val cand = HashMap<String, Int>(2048)
+        i = 0
+        while (i < n) {
+            if (i == 0 || text[i - 1] == '\n') {
+                var q = i
+                while (q < n && (text[q] == '\u3000' || text[q] == ' ' || text[q] == '\r')) q++
+                val len = headLen(q)
+                if (len > 0) {
+                    val w = text.substring(q, q + len)
+                    if (cleanName(w)) {
+                        cand[w] = (cand[w] ?: 0) + 1
+                        headN[w] = (headN[w] ?: 0) + 1
+                        val nx = q + len
+                        if (nx < n && (text[nx] == '，' || text[nx] == ',' || text[nx] == '、'))
+                            headComma[w] = (headComma[w] ?: 0) + 1
+                    }
+                }
+            }
+            i++
+        }
+        i = 0
+        while (i < n) {
+            if (!han(text[i])) { i++; continue }
             val prev = if (i > 0) text[i - 1] else ' '
             if (i > 0 && han(prev) && prev != '的') { i++; continue }
-            if (!han(text[i])) { i++; continue }
-
             var got = 0
             var L = 4
             while (L >= 2) {
                 val e = i + L
                 if (e <= n) {
-                    var allHan = true
-                    for (k in i until e) if (!han(text[k])) { allHan = false; break }
-                    if (allHan && !tbl.has(text, i, L) && !badTail(i, L)) {
-                        var clean = true
-                        for (k in i until e) if (text[k] in BAD) { clean = false; break }
-                        if (clean && text[e - 1] !in TAIL) {
-                            var p = e
-                            var skips = 0
-                            while (skips < 3) {
-                                var more = false
-                                for (al in advLens) {
-                                    if (adv.has(text, p, al)) { p += al; more = true; break }
-                                }
-                                if (!more) break
-                                skips++
-                            }
-                            if (verbAt(p)) { got = L; break }
+                    var ok = true
+                    for (k in i until e) if (!han(text[k]) || text[k] in BAD) { ok = false; break }
+                    if (ok && !tbl.has(text, i, L) && !badTail(i, L) && text[e - 1] !in TAIL) {
+                        var p = e
+                        var skips = 0
+                        while (skips < 3) {
+                            var more = false
+                            for (al in advLens) if (adv.has(text, p, al)) { p += al; more = true; break }
+                            if (!more) break
+                            skips++
                         }
+                        if (verbAt(p)) { got = L; break }
                     }
                 }
                 L--
             }
             if (got > 0) {
-                val s = text.substring(i, i + got)
-                said[s] = (said[s] ?: 0) + 1
+                var w = text.substring(i, i + got)
+                while (w.isNotEmpty() && w[0] in LEAD) w = w.drop(1)
+                if (w.length >= 2 && cleanName(w)) cand[w] = (cand[w] ?: 0) + 1
             }
             i++
         }
-        if (said.isEmpty()) return emptyList()
-
-        // 够格的候选：说得多、砍掉前置介词
-        val cand = HashMap<String, Int>(said.size)
-        for ((k, c) in said) {
-            if (c < 3) continue
-            var w = k
-            while (w.isNotEmpty() && w[0] in LEAD) w = w.drop(1)
-            if (w.length >= 2) cand[w] = (cand[w] ?: 0) + c
-        }
         if (cand.isEmpty()) return emptyList()
 
-        // 按前两个字建索引，后两遍都靠它
-        val idx = HashMap<Int, MutableList<String>>(cand.size * 2)
-        for (w in cand.keys) {
-            val a = w[0].code shl 16 or w[1].code
-            idx.getOrPut(a) { ArrayList(2) }.add(w)
-        }
-        fun keyAt(p: Int): Int = if (p + 1 < n) text[p].code shl 16 or text[p + 1].code else -1
+        /*
+         * 候选串编成号，正文里查一次就是三个哈希。
+         *
+         * 长名字优先：同一处「百里无名」和「百里」都在表里，要的是长的那个。
+         */
+        val names = ArrayList<String>(cand.size)
+        cand.keys.sortedByDescending { it.length }.let { names.addAll(it) }
 
-        // ── 第二遍：「名字 + 的/在/把/也…」，说明它是个能当主语的名词 ──
-        val proof = HashMap<String, Int>(256)
-        var p2 = 0
-        while (p2 < n) {
-            idx[keyAt(p2)]?.let { list ->
-                for (w in list) {
-                    if (text.startsWith(w, p2)) {
-                        val e = p2 + w.length
-                        if (e < n && text[e] in PARTICLE) proof[w] = (proof[w] ?: 0) + 1
-                    }
-                }
-            }
-            p2++
-        }
-
-        // ── 第三遍：「很X」「太X」—— 那是形容词，不是人 ──
-        val deg = HashMap<String, Int>(64)
-        for (d in DEG) {
-            var q = text.indexOf(d)
-            while (q >= 0) {
-                val s = q + 1
-                if (q == 0 || !han(text[q - 1])) {
-                    idx[keyAt(s)]?.let { list ->
-                        for (w in list) if (text.startsWith(w, s)) deg[w] = (deg[w] ?: 0) + 1
-                    }
-                }
-                if (s >= n) break
-                q = text.indexOf(d, s)
+        val id = HashMap<String, Int>(names.size * 2)
+        names.forEachIndexed { idx, w -> id[w] = idx }
+        val ix2 = HashMap<Int, Int>(names.size * 2)
+        val ix3 = HashMap<Long, Int>(names.size * 2)
+        val ix4 = HashMap<Long, Int>(names.size * 2)
+        for (w in names) {
+            val v = id.getValue(w)
+            when (w.length) {
+                2 -> ix2[w[0].code shl 16 or w[1].code] = v
+                3 -> ix3[w[0].code.toLong() shl 32 or (w[1].code.toLong() shl 16) or w[2].code.toLong()] = v
+                4 -> ix4[w[0].code.toLong() shl 48 or (w[1].code.toLong() shl 32) or
+                    (w[2].code.toLong() shl 16) or w[3].code.toLong()] = v
             }
         }
 
-        val keep = HashMap<String, Int>(cand.size)
-        for ((w, c) in cand) {
-            if (w in people) { if ((deg[w] ?: 0) == 0) keep[w] = c; continue }
-            if ((proof[w] ?: 0) < 2) continue
-            if ((deg[w] ?: 0) > 0) continue
-            keep[w] = c
+        /** [p] 起长 [len] 的那一段是第几号名字。-1 = 不是。 */
+        fun findAt(p: Int, len: Int): Int {
+            if (p < 0 || p + len > n) return -1
+            return when (len) {
+                2 -> ix2[text[p].code shl 16 or text[p + 1].code] ?: -1
+                3 -> ix3[text[p].code.toLong() shl 32 or (text[p + 1].code.toLong() shl 16) or
+                    text[p + 2].code.toLong()] ?: -1
+                4 -> ix4[text[p].code.toLong() shl 48 or (text[p + 1].code.toLong() shl 32) or
+                    (text[p + 2].code.toLong() shl 16) or text[p + 3].code.toLong()] ?: -1
+                else -> -1
+            }
         }
-        if (keep.isEmpty()) return emptyList()
 
         /*
-         * 尾巴砍掉：A 包着 B，而且 B 几乎占了 A 全部的出场，A 就是「B + 一个多余的尾巴」。
-         * 「赵惊鸿则」对「赵惊鸿」、「嬴政心中」对「嬴政」，都靠这一刀切掉。
+         * 白名单：这个串在书里有没有以「说话人」的样子出现过 ——
+         * 「名字 + 状语{0,3} + 说类动词」或者「名字 + ：」。
+         *
+         * 真名一定会：赵惊鸿道、扶苏：、蒙毅问道。
+         * 「农耕」「很快」「外面」「见状」不会 —— 它们能挤进段首，却一次也没当过引导语。
+         * 这一条不靠排除表，所以换一本书也成立。
          */
-        val names = keep.keys.sortedWith(
-            compareByDescending<String> { keep[it] }.thenBy { it.length }
+        val known = BooleanArray(names.size)
+        /* 全书总出现、后跟「地/得」、当引导语的次数。三样都在这一遍里数完。 */
+        val allN = IntArray(names.size)
+        val diN = IntArray(names.size)
+        val cntN = IntArray(names.size)
+        i = 0
+        while (i < n) {
+            if (!han(text[i])) { i++; continue }
+            if (i > 0 && han(text[i - 1]) && text[i - 1] != '的') { i++; continue }
+            var v = -1
+            var use = 0
+            for (len in 4 downTo 2) {
+                if (i + len > n) continue
+                val x = findAt(i, len)
+                if (x >= 0) { v = x; use = len; break }
+            }
+            if (v < 0) { i++; continue }
+            val e = i + use
+            allN[v]++
+            if (e < n && (text[e] == '地' || text[e] == '得')) diN[v]++
+            if (e < n && (text[e] == '：' || text[e] == ':')) { known[v] = true; cntN[v]++; i = e; continue }
+            var p2 = e
+            var skips = 0
+            while (skips < 3) {
+                var more = false
+                for (al in advLens) if (adv.has(text, p2, al)) { p2 += al; more = true; break }
+                if (!more) break
+                skips++
+            }
+            if (verbAt(p2)) { known[v] = true; cntN[v]++ }
+            i = e
+        }
+
+        /** [lo, hi) 里第一个能当主语的名字。-1 = 没有。 */
+        fun nameIn(lo: Int, hi: Int): Int {
+            var k = lo
+            while (k < hi) {
+                if (!han(text[k])) { k++; continue }
+                var v = -1
+                var use = 0
+                for (len in 4 downTo 2) {
+                    if (k + len > hi) continue
+                    val x = findAt(k, len)
+                    if (x >= 0) { v = x; use = len; break }
+                }
+                if (v < 0) { k++; continue }
+                // 受话人：对/向/朝/给/被/把 后面那个不是主语。
+                if (k > 0 && text[k - 1] in PREP) { k += use; continue }
+                /*
+                 * 名字后面紧跟逗号、顿号、的 —— 那是呼语或状语，不是主语。
+                 * 「郁闷，他继续道：」里「郁闷」后面就是逗号；「离开的时候」后面是的。
+                 */
+                val nx = if (k + use < n) text[k + use] else ' '
+                if (nx == '，' || nx == ',' || nx == '、') { k += use; continue }
+                /* 不在「名字 + 说类动词」或「名字 + ：」里露过面的，不是人。 */
+                if (!known[v]) { k += use; continue }
+                return v
+            }
+            return -1
+        }
+
+        /** 从 [hi] 往回找最后一个分句的起点。分句按逗号、句号、问号、感叹号、分号切。 */
+        fun clauseStart(lo: Int, hi: Int): Int {
+            var k = hi
+            while (k > lo) {
+                val c = text[k - 1]
+                if (c == '，' || c == '。' || c == '！' || c == '？' || c == '；' ||
+                    c == ',' || c == ';' || c == '!'
+                ) return k
+                k--
+            }
+            return lo
+        }
+
+        /** 从 [hi] 往回找最后一个整句的起点。 */
+        fun sentStart(lo: Int, hi: Int): Int {
+            var k = hi
+            while (k > lo) {
+                val c = text[k - 1]
+                if (c == '。' || c == '！' || c == '？' || c == '；' || c == '\n') return k
+                k--
+            }
+            return lo
+        }
+
+        /*
+         * ── 三、归属。
+         *
+         * 一次对白一个说话人。引号前面看最后一个分句（「李谲安横枪：」），
+         * 那一段里没有名字才退回整句开头（「扶苏走上前，关上房门，沉声道：」）。
+         * 引号后面也看，管「“……！”赵高问」这种。
+         *
+         * [from] 是上一个右引号之后的位置：同一段里第二句对白，不能拿第一句里的名字当主语。
+         */
+        fun owner(from: Int, qs: Int, qe: Int, pe: Int): Int {
+            if (qs > from) {
+                val lo = maxOf(from, qs - 80)
+                val cs = clauseStart(lo, qs)
+                val a = nameIn(cs, qs)
+                if (a >= 0) return a
+                val ss = sentStart(lo, qs)
+                val b = nameIn(ss, qs)
+                if (b >= 0) return b
+            }
+            /* 引号后面从右引号的下一格开始 —— 从 qs+1 开始是引号里面的字。 */
+            val from2 = minOf(pe, qe + 1)
+            if (from2 >= pe) return -1
+            var ce = from2
+            while (ce < pe && text[ce] !in "，。！？；,;") ce++
+            val c = nameIn(from2, ce)
+            if (c >= 0) return c
+            var ee = from2
+            while (ee < pe && text[ee] != '\n') ee++
+            return nameIn(from2, minOf(pe, ee))
+        }
+
+        val seg = HashMap<String, Int>(1024)
+        var ps = 0
+        while (ps <= n) {
+            var pe = ps
+            while (pe < n && text[pe] != '\n') pe++
+            // 段里得有引号才谈得上说话人。
+            var hasQuote = false
+            for (k in ps until pe) {
+                val c = text[k]
+                if (c == '“' || c == '「') { hasQuote = true; break }
+            }
+            if (hasQuote && pe - ps > 6) {
+                var last = ps
+                var k = ps
+                while (k < pe) {
+                    val c = text[k]
+                    if (c == '“' || c == '「') {
+                        var e2 = k + 1
+                        while (e2 < pe && text[e2] != '”' && text[e2] != '」') e2++
+                        val qe = if (e2 < pe) e2 else pe - 1
+                        val v = owner(last, k, qe, pe)
+                        if (v >= 0) {
+                            val w = names[v]
+                            seg[w] = (seg[w] ?: 0) + 1
+                        }
+                        last = if (e2 < pe) e2 + 1 else pe
+                        k = last
+                    } else k++
+                }
+            }
+            ps = pe + 1
+        }
+
+        if (seg.isEmpty()) return emptyList()
+
+        val sorted = seg.keys.sortedWith(
+            compareByDescending<String> { seg[it] }.thenBy { it.length }
         )
-        val dead = HashSet<String>(16)
-        for (a in names) {
+        /*
+         * 三刀：
+         *   一、A 包着 B，且 A 不比 B 多 —— A 是「B + 一个多余尾巴」。
+         *   二、B 是 A 的前缀，且 B 不比 A 多 —— B 是 A 被切断的一截（司马 / 司马寒）。
+         *   三、B 是 A 的尾巴，且 B 连 A 的零头都不到 —— 「惊鸿」是「赵惊鸿」的后半截。
+         */
+        val dead = HashSet<String>(64)
+        for (a in sorted) {
             if (a in dead) continue
-            val ca = keep.getValue(a)
-            for (b in names) {
-                if (a == b || b in dead || !a.contains(b)) continue
-                if (ca <= keep.getValue(b) * 1.15) { dead.add(a); break }
+            val ca = seg.getValue(a)
+            for (b in sorted) {
+                if (a == b || b in dead) continue
+                val cb = seg.getValue(b)
+                if (a.length > b.length && a.contains(b) && ca <= cb * 1.15) { dead.add(a); break }
+                if (b.length > a.length && b.startsWith(a) && ca <= cb * 1.2) { dead.add(a); break }
+                if (a.endsWith(b) && cb * 5 <= ca) { dead.add(b); break }
             }
         }
 
-        val out = ArrayList<CastName>(keep.size)
-        for (w in names) {
+        val out = ArrayList<CastName>(seg.size)
+        for (w in sorted) {
             if (w in dead) continue
-            out.add(CastName(w, keep.getValue(w)))
+            val c = seg.getValue(w)
+            if (c < 3) continue
+            /*
+             * 台词数和「这个名字起头的段数」要在一个数量级。
+             *
+             * 真名当主语，段首是要出场的：赵惊鸿 13979 句 / 段首 11332 段。
+             * 「郁闷」全书段首只出现 3 次，台词却有 35 句 —— 多出来的那些是
+             * 「（主语省略）郁闷道：」，主语不是它。这个比值和词义无关，换本书也成立。
+             */
+            val head = cand[w] ?: 0
+            if (head < 1 || c > head * 3 + 8) continue
+            val k = id.getValue(w)
+            if (!passes(w, c, allN[k], diN[k], headN[w] ?: 0, cntN[k], headComma[w] ?: 0)) continue
+            out.add(CastName(w, c))
         }
         out.sortByDescending { it.lines }
         return if (max > 0 && out.size > max) out.subList(0, max) else out
     }
+
+    /**
+     * 最后一道筛：这一串到底是人，还是被当成了主语的状语、器物、半截短语。
+     *
+     * 四条判据全用「它在书里怎么被用」，不看词义 —— 词义那一路得永远补表，换本书就废。
+     * 每一条都在《大秦》358 万字上量过，真名与噪声的分布不重叠（数据见设计/派角-归属算法.md）。
+     *
+     * @param c     台词数（这一个串当说话人的次数）
+     * @param all   全书出现次数
+     * @param di    后面紧跟「地」或「得」的次数 —— 状语或形容词的标记
+     * @param head  段首出现次数
+     * @param guide 「名字 + 状语 + 说类动词」或「名字：」的次数
+     */
+    private fun passes(
+        w: String, c: Int, all: Int, di: Int, head: Int, guide: Int, comma: Int,
+    ): Boolean {
+        /*
+         * 一、状语、形容词。
+         *
+         * 「郁闷道：」「担忧地看着」—— 这类词后面常跟「地」「得」，真名一次都不会：
+         * 郁闷 95/562、担忧 40/184、惊恐 84/156；赵惊鸿 4/29004、扶苏 12/13470。
+         */
+        if (di >= 3 && di * 20 >= all) return false
+        /*
+         * 二、器物、泛称、只在段首露过一面的碎词。
+         *
+         * 真名当主语，段首是要出场的：夏青 43/228、巴清 34/98、邹茜 35/59。
+         * 反过来宣纸 9/468、脑袋 6/497、环首刀 2/181 —— 它们能挤进段首一次两次，
+         * 绝大多数时候出现在别的位置。台词多的不杀（主角偶尔被别称顶掉段首）。
+         */
+        if (c <= 40 && head * 100 < all * 16) return false
+        /*
+         * 三、三字以上的半截短语。
+         *
+         * 「齐声呐」「一字一顿」「满脸亢奋」：段首按 2–4 字硬切，切在词中间。
+         * 它们全书只出现个位数，真配角再少也有十几二十次。
+         */
+        if (w.length >= 3 && all <= 10) return false
+        /*
+         * 四、段首一大堆、当说话人却没几回的。
+         *
+         * 「甚至」段首 228 次、当说话人 2 次 —— 它开头的是「甚至有些…」这种句子。
+         * 真名的段首数和台词数差不到一个数量级：赵惊鸿 15376/3857。
+         */
+        if (c <= 30 && head > c * 8) return false
+        /*
+         * 五、段首就断开的状语开场。
+         *
+         * 「同时，赵惊鸿道：」「甚至，他也……」。名字在段首很少自己跟一个逗号。
+         * 台词多的不杀 —— 主角被喊「赵惊鸿，你过来」的时候也会这样。
+         */
+        if (c <= 40 && head > 2 && comma * 2 >= head) return false
+        return guide >= 1
+    }
+
+    /** 名字紧跟这些字，说明它是受话人或者宾语，不是说话人。 */
+    private const val PREP = "对向朝被把给让替于同与和"
+
+    /** 只能当数量词、从来不是名字的形状：二人、三人、几位、一个。 */
+    private val COUNT = Regex("^[一二三四五六七八九十百千万两几数单双半][人个位名者员群帮伙队丝缕抹道片些点分毫层阵束股]$")
 
     /**
      * 从「名字：」这种写法里，把这本书自己那套说法捞出来。

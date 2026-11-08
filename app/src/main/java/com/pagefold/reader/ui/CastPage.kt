@@ -14,6 +14,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -120,6 +122,8 @@ fun CastScreen(
     var wordsOpen by remember { mutableStateOf(false) }
     /** 完整名单那张纸。 */
     var allOpen by remember { mutableStateOf(false) }
+    /** 嗓子那张纸是从名单点进来的。关掉它要还回名单，不是退回派角。 */
+    var fromAll by remember { mutableStateOf(false) }
     /** 名单里的搜索。 */
     var find by remember { mutableStateOf("") }
     /** "import" / "export" / "paste"，空 = 都没开。 */
@@ -129,17 +133,39 @@ fun CastScreen(
     var hand by remember { mutableStateOf("") }
     /** 准备写出去的那一坨。 */
     var outBody by remember { mutableStateOf("") }
+    /** 这份表动过没有。退出时用它决定要不要让外层重读。 */
+    var dirty by remember { mutableStateOf(false) }
 
     fun save(next: CastBook, note: String? = null) {
         cast = next
         val json = RuleCodec.toJson(next)
         if (book == null) app.field.edit { it.copy(castJson = json) }
         else app.shelf.setCast(book.id, json)
-        onChanged()
+        /*
+         * 外层那份快照（阅读页拿着的 book）先不刷新。
+         *
+         * 每点一次嗓子都让外层重读整本书的配置、重建一遍认人的正则，在低端机上
+         * 就是一下明显的卡。改动已经落盘了，退出派角时统一通知一次就够。
+         */
+        dirty = true
         if (note != null) msg = note
     }
 
     fun say(t: String) { msg = t }
+
+    /**
+     * 关掉嗓子那张纸。
+     *
+     * 从完整名单点进来的，关掉之后还回名单 —— 在那儿就是挨个往下调，
+     * 每调一个人都退回派角、再重新点「全看」进来找位置，等于把这件事做成十次往返。
+     */
+    fun closeVoice() {
+        voiceEdit = null
+        if (fromAll) {
+            fromAll = false
+            allOpen = true
+        }
+    }
 
     val state = book?.let { Counts.of(it.id) } ?: Counts.IDLE
 
@@ -159,6 +185,9 @@ fun CastScreen(
         val now = Counts.of(b.id)
         if (now == Counts.DONE && seen != Counts.DONE) {
             cast = loadCast(app, app.shelf.find(b.id) ?: b)
+            /* 名单整份换过了，手上翻开的旧名单/旧组都不是这一份，收掉。 */
+            fromAll = false
+            voiceEdit = null
             // 外层那本快照也过时了，让它重读一遍，念出来的才是新名单。
             onChanged()
         }
@@ -214,11 +243,23 @@ fun CastScreen(
         }
         // 嗓子是本机攒的：表里没写的，留旧的。
         val mine = cast.roles.filter { it.voice.isNotBlank() }.associate { it.name to it.voice }
+        /*
+         * 句数按名字从旧名单带过来。
+         *
+         * 一行一组那种文件里没有句数，照它建的名单全是 0，导进来的列表就成了一堆
+         * 「0 句」挨在一起 —— 用户看到的是「导入把数出来的东西弄没了」。
+         * 只填他自己那一份；整组的合计由列表自己加，存两份就会对不上。
+         */
+        val known = cast.pool.associate { it.name to it.lines }
+        val filled = loaded.pool.map { p -> p.copy(lines = known[p.name] ?: 0) }
         save(
             loaded.copy(
                 roles = loaded.roles.map { it.copy(voice = it.voice.ifBlank { mine[it.name].orEmpty() }) },
+                pool = filled,
                 narrator = loaded.narrator.ifBlank { cast.narrator },
                 dialog = loaded.dialog.ifBlank { cast.dialog },
+                // 题材包是认人的，导入一份派角不该把它清空。
+                packs = loaded.packs.ifEmpty { cast.packs },
             ),
             "进来了 ${loaded.roles.size} 个角色 · ${loaded.rules.size} 条规则",
         )
@@ -267,7 +308,8 @@ fun CastScreen(
     val title = (book?.title ?: "派角").take(16).ifBlank { "cast" }
     val all = rowsOf(cast)
     val shown = all.take(20)
-    val heads = all.sumOf { 1 + it.alt.size }
+    /* 人数按人头算：组名本身是个角色时，他也是这一组里的人。 */
+    val heads = all.sumOf { it.heads }
     val grpN = all.count { it.alt.isNotEmpty() }
 
     /* 空嗓子的行实际用对白那副，能不能吃调门看的就是对白那副。 */
@@ -284,7 +326,10 @@ fun CastScreen(
                 Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconBtn(Icons.AutoMirrored.Filled.ArrowBack, "返回", onBack, size = 34.dp)
+                IconBtn(Icons.AutoMirrored.Filled.ArrowBack, "返回", {
+                    if (dirty) onChanged()
+                    onBack()
+                }, size = 34.dp)
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     T("派角", size = 17, weight = FontWeight.Medium)
@@ -337,6 +382,7 @@ fun CastScreen(
                                 lines = r.lines,
                                 voice = r.voice,
                                 tag = r.tag,
+                                who = r.who,
                                 onClick = { voiceEdit = r.name },
                             )
                         }
@@ -522,32 +568,45 @@ fun CastScreen(
                 rows = all,
                 sel = sel,
                 groupName = groupName,
+                hint = firstOf(all, sel),
                 onName = { groupName = it },
                 onToggle = { n -> sel = if (n in sel) sel - n else sel + n },
                 onClose = { grouping = false },
                 onOk = {
-                    val members = sel.toList()
+                    /*
+                     * 挑中的要是一个已经并好的组，带过来的是它里面的人，不是组名 ——
+                     * 把组名当成一个人并进新组，原来那组的人就没地方去了。
+                     */
+                    val members = all.filter { it.name in sel }
+                        .flatMap { r -> if (r.alt.isEmpty()) listOf(r.name) else r.alt }
+                        .distinct()
                     if (members.isEmpty()) {
                         say("先挑两个人")
+                    } else if (members.size == 1) {
+                        say("一个人成不了组")
                     } else {
-                        val name = groupName.trim().ifBlank { members.first() }
                         /*
-                         * 组里的人原来各占一行、各配一副嗓子。并进一组之后：
-                         * 这一组按组名占一行，成员全收进 alt —— 书里谁开口，
-                         * 认出来的都是这一组的嗓子。原来那些行不再单独出现。
+                         * 组名照旧取第一个人 —— 用户认的是那个名字。
+                         *
+                         * 但 alt 里必须带上他本人：原来 filter { it != name } 把他从成员表里
+                         * 抹掉了，于是详情里看不见他、解散也放不出来，并一次少一个人。
+                         * 组名只是个标签，成员表才是「这一组有几个人」。
                          */
-                        val voice = cast.roles.firstOrNull { it.name == name }?.voice
-                            ?: cast.roles.firstOrNull { it.name in members }?.voice.orEmpty()
+                        val name = groupName.trim().ifBlank { members.first() }
+                        val first = cast.roles.firstOrNull { it.name in members }
                         val keep = cast.roles
                             .filter { it.name !in members && it.name != name }
                             .map { r -> r.copy(alt = r.alt.filter { it !in members }) }
                         val group = CastRole(
                             name = name,
-                            voice = voice,
+                            voice = first?.voice.orEmpty(),
+                            style = first?.style.orEmpty(),
+                            // 组名就是 members 里第一个的时候，别把他也写进成员表 —— 会算两遍。
                             alt = members.filter { it != name },
                         )
                         val pool = cast.pool.map { if (it.name in members) it.copy(on = false) else it }
                         save(cast.copy(roles = keep + group, pool = pool), "并成了「$name」")
+                        groupName = ""
                         grouping = false
                     }
                 },
@@ -556,7 +615,7 @@ fun CastScreen(
 
         voiceEdit?.let { name ->
             val cur = voiceOf(cast, name)
-            val members = altOf(cast, name)
+            val members = altOf(cast, name).distinct()
             VoiceSheet(
                 name = name,
                 voice = cur,
@@ -564,11 +623,47 @@ fun CastScreen(
                 members = members,
                 groups = groups,
                 canStyle = canStyleOf(name),
+                /*
+                 * 改组名。
+                 *
+                 * 组名只是个标签，改它不该动组里的人 —— 但新名字要是正好撞上组里某个
+                 * 人的名字，那个人就从「成员」变成「标签」，所以撞了就把原来那个名
+                 * 从成员里换成新名，人数不变。
+                 */
+                onRename = { nn ->
+                    val v = nn.trim().take(12)
+                    if (v.isNotEmpty() && v != name) {
+                        /*
+                         * 组名只是个标签，改名不该动成员表 —— 人还是那些人。
+                         * 新名字撞上已经有的角色，就在那一个人身上并到一起，不留两个同名的。
+                         */
+                        val other = cast.roles.firstOrNull { it.name == v }
+                        val roles = if (other != null) {
+                            cast.roles.filter { it.name != name }.map {
+                                if (it.name == v) it.copy(alt = (it.alt + members).distinct().filter { m -> m != v }) else it
+                            }
+                        } else {
+                            cast.roles.map {
+                                if (it.name == name) it.copy(name = v, alt = members.filter { m -> m != v }) else it
+                            }
+                        }
+                        val pool = cast.pool.map { if (it.name == v) it.copy(on = false) else it }
+                        save(cast.copy(roles = roles, pool = pool), "改成了「$v」")
+                        voiceEdit = v
+                    }
+                },
+                pool = all.filter { r -> r.alt.isEmpty() && r.name != name && r.name !in members },
+                onAdd = { m ->
+                    val alt = (members + m).distinct()
+                    val roles = cast.roles.map { if (it.name == name) it.copy(alt = alt) else it }
+                    val pool = cast.pool.map { if (it.name == m) it.copy(on = false) else it }
+                    save(cast.copy(roles = roles, pool = pool), "把「$m」并了进来")
+                },
                 onVoice = { v ->
-                    save(cast.with(CastRole(name, v, cast.styleOf(name), altOf(cast, name))), null)
+                    save(cast.with(CastRole(name, v, cast.styleOf(name), members)), null)
                 },
                 onStyle = { st ->
-                    save(cast.with(CastRole(name, voiceOf(cast, name), st, altOf(cast, name))), null)
+                    save(cast.with(CastRole(name, voiceOf(cast, name), st, members)), null)
                 },
                 onRemove = { m ->
                     /*
@@ -580,28 +675,44 @@ fun CastScreen(
                     val rest = members.filter { it != m }
                     val pool = cast.pool.map { if (it.name == m) it.copy(on = true) else it }
                     val roles = if (rest.isEmpty()) {
-                        // 组里就剩他自己了：组没了，他变回一个独立角色。
-                        cast.roles.filter { it.name != name } + CastRole(m)
+                        /*
+                         * 组里就剩他一个了。
+                         *
+                         * 组名本身是个角色（「嬴政」那种）→ 组散成他一个人，他留在原位；
+                         * 组名只是个标签（「众臣」那种）→ 标签撤掉，被拿出来的这个人单飞。
+                         */
+                        if (isPerson(cast, name)) {
+                            cast.roles.map { if (it.name == name) it.copy(alt = emptyList()) else it }
+                        } else {
+                            cast.roles.filter { it.name != name } + CastRole(m)
+                        }
                     } else {
-                        cast.roles.map {
-                            if (it.name == name) it.copy(alt = rest) else it
-                        } + CastRole(m)
+                        cast.roles.map { if (it.name == name) it.copy(alt = rest) else it } + CastRole(m)
                     }
                     save(cast.copy(roles = roles, pool = pool), "拿出了「$m」")
-                    if (rest.isEmpty()) voiceEdit = null
+                    if (rest.isEmpty()) closeVoice()
                 },
                 onDissolve = {
-                    val keep = cast.roles.filter { it.name != name } + members.map { CastRole(it) }
-                    val pool = cast.pool.map { if (it.name in members) it.copy(on = true) else it }
-                    save(cast.copy(roles = keep, pool = pool), "散开了")
-                    voiceEdit = null
+                    /*
+                     * 全散开，一个不留。
+                     *
+                     * 组名本身是个角色的话，他也要跟着散出来 —— 只散成员的话，
+                     * 组名那个人随着组一起消失，看上去就是「怎么按都散不掉」。
+                     */
+                    val back = (if (isPerson(cast, name) && name !in members) listOf(name) else emptyList()) +
+                        members.distinct()
+                    val keep = cast.roles.filter { it.name != name } + back.map { CastRole(it) }
+                    val pool = cast.pool.map { if (it.name in back) it.copy(on = true) else it }
+                    save(cast.copy(roles = keep, pool = pool), "散开了 ${back.size} 个")
+                    closeVoice()
                 },
                 onDelete = {
                     val pool = cast.pool.filter { it.name != name && it.name !in members }
                     save(cast.copy(roles = cast.roles.filter { it.name != name }, pool = pool), "删掉了")
-                    voiceEdit = null
+                    closeVoice()
                 },
-                onClose = { voiceEdit = null },
+                onClose = { closeVoice() },
+                self = members.isNotEmpty() && isPerson(cast, name),
             )
         }
 
@@ -610,7 +721,7 @@ fun CastScreen(
                 rows = all,
                 find = find,
                 onFind = { find = it },
-                onClick = { n -> allOpen = false; voiceEdit = n },
+                onClick = { n -> allOpen = false; fromAll = true; voiceEdit = n },
                 onClose = { allOpen = false },
             )
         }
@@ -754,6 +865,10 @@ internal data class CastRow(
     val voice: String,
     /** 类别名（「秦·谋士」这种）。只用来标注。 */
     val tag: String = "",
+    /** 这一行一共几个人。单人就是 1；组是「组员 + 组名（如果组名本身是个角色）」。 */
+    val heads: Int = 1,
+    /** 这一组都是谁，用来摆副标题。单人为空。 */
+    val who: List<String> = emptyList(),
 )
 
 /**
@@ -764,18 +879,40 @@ internal data class CastRow(
  * 两边并起来，已经被并进别的组的（在别人的 alt 里）不再单独出现。
  */
 internal fun rowsOf(cast: CastBook): List<CastRow> {
-    val inGroup = cast.roles.flatMap { it.alt }.toSet()
+    /*
+     * 谁是「别人的组员」。
+     *
+     * 只认别的组 —— 组名和组里的一个人同名是常事（一组就是拿第一个人的名字起的），
+     * 那种情况下组自己不能被藏起来。
+     */
+    val owned = HashMap<String, String>()
+    cast.roles.forEach { r -> r.alt.forEach { if (it != r.name) owned[it] = r.name } }
     val lines = cast.pool.associate { it.name to it.lines }
+    /*
+     * 组名本人算不算一个人，只看名单里有没有这个名字。
+     *
+     * 「嬴政」是数出来的人，他那组就得是「嬴政、始皇」两个人；
+     * 「众臣」不是人，那组就是成员表里那几个。判据是名单，不是组名长得像不像人名。
+     */
+    val inPool = HashSet<String>(cast.pool.size * 2)
+    cast.pool.forEach { if (it.lines > 0 || it.on) inPool.add(it.name) }
     val out = ArrayList<CastRow>(cast.roles.size + 8)
     cast.roles.forEach { r ->
-        if (r.name in inGroup) return@forEach
+        val by = owned[r.name]
+        if (by != null && by != r.name) return@forEach
         val sum = (listOf(r.name) + r.alt).sumOf { lines[it] ?: 0 }
-        out.add(CastRow(r.name, r.alt, sum, r.voice, r.tag))
+        val who = if (r.alt.isEmpty()) emptyList()
+        else (if (r.name in inPool) listOf(r.name) else emptyList()) + r.alt
+        out.add(CastRow(r.name, r.alt, sum, r.voice, r.tag, if (who.isEmpty()) 1 else who.size, who))
     }
     cast.pool.forEach { p ->
-        if (!p.on || p.name in inGroup) return@forEach
+        if (!p.on || p.name in owned) return@forEach
         if (cast.roles.any { it.name == p.name }) return@forEach
-        out.add(CastRow(p.name, p.alt, p.lines, ""))
+        /*
+         * 名单里的一律当单人。alt 只属于角色表 —— 从名单里再抄一份，组散掉之后
+         * 它还挂在那儿，界面上就永远是个散不开的组。
+         */
+        out.add(CastRow(p.name, emptyList(), p.lines, ""))
     }
     /*
      * 组排在最前。
@@ -788,12 +925,42 @@ internal fun rowsOf(cast: CastBook): List<CastRow> {
     )
 }
 
+/**
+ * 这个名字是不是「一个人」，还是一条组的标签。
+ *
+ * 判据只有两条：名单里数出过他的台词，或者他在名单里勾着（单人角色）。
+ * 「嬴政」3996 句 → 是；「众臣」0 句、没勾 → 只是个标签。
+ * 这条判据决定三件事：人数怎么算、解散时要不要把他散出来、从组里拿出最后一个人时组怎么收场。
+ */
+internal fun isPerson(cast: CastBook, name: String): Boolean {
+    val p = cast.pool.firstOrNull { it.name == name } ?: return false
+    return p.lines > 0 || p.on
+}
+
 private fun voiceOf(cast: CastBook, name: String): String =
     cast.roles.firstOrNull { it.name == name }?.voice.orEmpty()
 
 private fun altOf(cast: CastBook, name: String): List<String> =
-    cast.roles.firstOrNull { it.name == name }?.alt
-        ?: cast.pool.firstOrNull { it.name == name }?.alt.orEmpty()
+    cast.roles.firstOrNull { it.name == name }?.alt.orEmpty()
+
+/**
+ * 把旧存档里的组理顺。
+ *
+ * 老版本并组时把组名当成组员写进了 alt。现在的口径是「alt 只装组名以外的人」，
+ * 组名本人按名单查 —— 名单里有他，他就是这一组里的人。
+ *
+ * 所以这里只做一件事：把 alt 里跟组名重了的那一项剔掉。不剔的话那个人会被算两次，
+ * 成员表里也会出现「嬴政、嬴政」。
+ */
+private fun heal(cast: CastBook): CastBook {
+    val hit = cast.roles.any { r -> r.alt.any { it == r.name } }
+    if (!hit) return cast
+    return cast.copy(roles = cast.roles.map { r -> r.copy(alt = r.alt.filter { it != r.name }) })
+}
+
+/** 不打名字时用哪一个：勾上的第一个人的名字。 */
+private fun firstOf(rows: List<CastRow>, sel: Set<String>): String =
+    rows.firstOrNull { it.name in sel }?.name.orEmpty()
 
 /** 这副嗓子能不能接调门。自建、克隆、系统那几副接不了，接不了就不摆这一块。 */
 private fun tasty(v: Voice): Boolean = v.engine == "mimo" && v.kind == "preset"
@@ -835,6 +1002,8 @@ private fun RoleRow(
     lines: Int,
     voice: String,
     tag: String,
+    /** 这一组都是谁（组名本身是角色时也在里面）。单人为空。 */
+    who: List<String>,
     onClick: () -> Unit,
 ) {
     val s = LocalSkin.current
@@ -859,7 +1028,8 @@ private fun RoleRow(
             if (alt.isNotEmpty()) {
                 Spacer(Modifier.height(2.dp))
                 T(
-                    "这一组还有 " + alt.joinToString("、"),
+                    "这一组 ${(if (who.isEmpty()) alt else who).size} 个人 · " +
+                        (if (who.isEmpty()) alt else who).joinToString("、"),
                     size = 9, color = s.inkFaint, maxLines = 1,
                 )
             }
@@ -946,7 +1116,8 @@ private fun summarize(pat: String): String {
 @Composable
 private fun Sheet(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
     val s = LocalSkin.current
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val cap = maxHeight * 0.86f
         Box(
             Modifier.fillMaxSize().background(s.ground.copy(alpha = 0.72f))
                 .clickable(
@@ -956,6 +1127,7 @@ private fun Sheet(title: String, onClose: () -> Unit, content: @Composable () ->
         )
         Column(
             Modifier.fillMaxWidth().align(Alignment.BottomCenter)
+                .heightIn(max = cap)
                 .background(s.ground, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                 .pointerInput(Unit) { detectTapGestures { } }
                 .imePadding()
@@ -1105,6 +1277,7 @@ private fun GroupSheet(
     rows: List<CastRow>,
     sel: Set<String>,
     groupName: String,
+    hint: String,
     onName: (String) -> Unit,
     onToggle: (String) -> Unit,
     onClose: () -> Unit,
@@ -1151,9 +1324,11 @@ private fun GroupSheet(
 
         Spacer(Modifier.height(12.dp))
         Lab("这一组叫什么")
-        Field(groupName, sel.firstOrNull().orEmpty(), 0) { onName(it) }
-        Spacer(Modifier.height(4.dp))
-        T("空着就用勾上的第一个名字。", size = 9, color = s.inkFaint)
+        Field(groupName, hint, 0) { onName(it) }
+        if (hint.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            T("空着就叫「$hint」。", size = 9, color = s.inkFaint)
+        }
 
         Spacer(Modifier.height(8.dp))
         T("已挑 ${sel.size} 个", size = 10, color = if (sel.isEmpty()) s.inkFaint else s.flame)
@@ -1177,18 +1352,33 @@ private fun VoiceSheet(
     members: List<String>,
     groups: List<Pair<String, List<Voice>>>,
     canStyle: Boolean,
+    onRename: (String) -> Unit,
     onVoice: (String) -> Unit,
     onStyle: (String) -> Unit,
     onRemove: (String) -> Unit,
     onDissolve: () -> Unit,
     onDelete: () -> Unit,
     onClose: () -> Unit,
+    pool: List<CastRow> = emptyList(),
+    onAdd: (String) -> Unit = {},
+    /** 组名本身也是个角色（「嬴政」那种）。他不在 members 里，但要让人看见他在这一组。 */
+    self: Boolean = false,
 ) {
     val s = LocalSkin.current
     var v by remember(name) { mutableStateOf(voice) }
     var st by remember(name) { mutableStateOf(style) }
+    var nn by remember(name) { mutableStateOf(name) }
 
     Sheet(if (members.isEmpty()) "「$name」" else "「$name」这一组", onClose) {
+        if (members.isNotEmpty()) {
+            Lab("这一组叫什么")
+            Field(nn, name, 0) { nn = it.take(12) }
+            Spacer(Modifier.height(8.dp))
+            if (nn.trim().isNotEmpty() && nn.trim() != name) {
+                Btn("改成「${nn.trim()}」", { onRename(nn) }, BtnKind.GHOST, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
+            }
+        }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
             PickChip("跟对白那一副", v.isBlank(), { v = ""; onVoice("") }, Modifier.padding(end = 6.dp))
         }
@@ -1229,8 +1419,24 @@ private fun VoiceSheet(
         }
 
         if (members.isNotEmpty()) {
-            Lab("这一组")
+            Lab("这一组 ${members.size} 个人")
             Column(Modifier.fillMaxWidth()) {
+                /*
+                 * 组名本人排在最前，没有 ×。
+                 *
+                 * 他不在 members 里（members 只装「组名以外的人」），所以原来详情里看不见他，
+                 * 用户会以为「这一组里没有组名那个人」。他不是组员，他是这一组的头。
+                 */
+                if (self) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        T(name, size = 13, modifier = Modifier.weight(1f), maxLines = 1)
+                        T("组名", size = 9, color = s.inkFaint)
+                    }
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.05f)))
+                }
                 members.forEach { m ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 9.dp),
@@ -1251,9 +1457,21 @@ private fun VoiceSheet(
                     Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.05f)))
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Btn("解散这一组", onDissolve, BtnKind.GHOST, Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
+            if (pool.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Lab("再并谁进来")
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    pool.forEach { r ->
+                        PickChip(r.name, false, { onAdd(r.name) }, Modifier.padding(end = 6.dp))
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+            if (members.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Btn("解散这一组", onDissolve, BtnKind.GHOST, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+            }
         }
         Btn(
             if (members.isEmpty()) "删掉「$name」" else "删掉这一组",
@@ -1273,7 +1491,11 @@ private fun AllSheet(
     onClose: () -> Unit,
 ) {
     val s = LocalSkin.current
-    val hit = if (find.isBlank()) rows else rows.filter { it.name.contains(find.trim()) }
+    val hit = if (find.isBlank()) rows
+    else rows.filter { r ->
+        val f = find.trim()
+        r.name.contains(f) || r.who.any { it.contains(f) } || r.alt.any { it.contains(f) }
+    }
     Sheet("角色 · ${rows.size}", onClose) {
         Field(find, "找谁", 0) { onFind(it) }
         Spacer(Modifier.height(10.dp))
@@ -1285,6 +1507,7 @@ private fun AllSheet(
                     lines = r.lines,
                     voice = r.voice,
                     tag = r.tag,
+                    who = r.who,
                     onClick = { onClick(r.name) },
                 )
             }
@@ -1484,8 +1707,8 @@ private fun loadCast(app: App, book: BookMeta?): CastBook {
      */
     val fresh = book?.let { app.shelf.find(it.id) }
     val own = fresh?.castJson.orEmpty().ifBlank { book?.castJson.orEmpty() }
-    if (own.isNotBlank()) return RuleCodec.fromJson(own)
+    if (own.isNotBlank()) return heal(RuleCodec.fromJson(own))
     val g = app.field.now.castJson
-    if (g.isNotBlank()) return RuleCodec.fromJson(g)
+    if (g.isNotBlank()) return heal(RuleCodec.fromJson(g))
     return CastBook(narrator = app.field.now.narratorVoice, dialog = app.field.now.defaultVoice)
 }
