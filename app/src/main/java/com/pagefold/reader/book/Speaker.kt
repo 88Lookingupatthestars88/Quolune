@@ -437,6 +437,24 @@ object Look {
     fun speakers(text: String, max: Int = 400): List<CastName> {
         val n = text.length
         if (n < 64) return emptyList()
+        /*
+         * 大书（几百万字往上）在 4GB 手机上数人，会撞到堆顶。
+         *
+         * 原来是直接崩：OutOfMemoryError 不是 Exception，调用方 catch 不住，
+         * 整个应用跟着退出 —— 用户看到的是「导进一本大书，点开派角就闪退」。
+         * 这里兜一层：数不出来就给空名单，让界面照「还没数」的样子摆着，
+         * 用户还能手动配嗓子，不至于被一本书废掉整个应用。
+         */
+        return try {
+            count(text, n, max)
+        } catch (e: OutOfMemoryError) {
+            emptyList()
+        } catch (e: StackOverflowError) {
+            emptyList()
+        }
+    }
+
+    private fun count(text: String, n: Int, max: Int): List<CastName> {
 
         val tbl = dict
         val adv = advDict

@@ -113,7 +113,7 @@ fun AboutScreen(
                 horizontalArrangement = Arrangement.End,
             ) {
                 Text(
-                    "版本 2.3.1",
+                    "版本 3.0",
                     fontSize = 11.sp,
                     color = skin.inkFaint,
                     letterSpacing = 1.2.sp,
