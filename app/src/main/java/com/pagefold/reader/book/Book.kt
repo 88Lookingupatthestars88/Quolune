@@ -36,6 +36,7 @@ data class BookMeta(
  * 正文永远留在原文件 / files/books 下，不复制、不拼接，避免内存爆掉。
  */
 class Shelf(ctx: Context) {
+    private val ctx: Context = ctx.applicationContext
     private val dir = File(ctx.filesDir, "books").apply { mkdirs() }
     private val idx = File(ctx.filesDir, "shelf.json")
     private val gson = Gson()
@@ -88,6 +89,9 @@ class Shelf(ctx: Context) {
         list.removeAll { it.id == id }
         save(list)
         if (target != null) runCatching { File(target.path).delete() }
+        /* 这本书的句库和章节目录跟着走，不然删了书还占十几 MB。 */
+        runCatching { Lines.drop(ctx, id) }
+        runCatching { Chapters.drop(ctx, id) }
         return list
     }
 
@@ -125,6 +129,52 @@ class Shelf(ctx: Context) {
         }
         return list
     }
+
+    /**
+     * 读某一章的正文。
+     *
+     * 台账要一段一段摆出来，但它只需要**这一章**。整本读出来再切，
+     * 一本三百万字的书就是七兆字符一次进堆 —— 在这样的机器上够呛。
+     */
+    fun readChapter(id: String, ch: Int): String {
+        val bm = find(id) ?: return ""
+        /*
+         * 目录只读落盘那份，不读整本正文。
+         *
+         * 上一版是 read(id).substring(...)：读整本（三百万字 ≈ 七兆字符）+ 再切一份，
+         * 台账翻一章就来一次，翻上七八页就顶到堆顶。现在只开一个 32K 的读缓冲，
+         * 一边读一边累计字符数，只把落在这一章里的那几段留下来。
+         */
+        val list = Chapters.cached(ctx, id) ?: return ""
+        val c = list.getOrNull(ch) ?: return ""
+        val from = c.start.coerceAtLeast(0)
+        val to = c.end.coerceAtLeast(from)
+        val out = StringBuilder(minOf(to - from, 1 shl 18) + 16)
+        runCatching {
+            File(bm.path).inputStream().use { ins ->
+                val r = java.io.InputStreamReader(ins, Charsets.UTF_8)
+                val buf = CharArray(1 shl 15)
+                var pos = 0
+                while (true) {
+                    val n = r.read(buf)
+                    if (n <= 0) break
+                    val a = pos
+                    val b = pos + n
+                    if (b > from && a < to) {
+                        val s = (from - a).coerceAtLeast(0)
+                        val e = (to - a).coerceAtMost(n)
+                        if (e > s) out.append(buf, s, e - s)
+                    }
+                    pos = b
+                    if (pos >= to) break
+                }
+            }
+        }
+        return out.toString()
+    }
+
+    /** 目录建成没有。台账要按这个说一句「先进这本书」。 */
+    fun hasIndex(id: String): Boolean = Chapters.cached(ctx, id)?.isNotEmpty() == true
 
     fun find(id: String): BookMeta? = all().firstOrNull { it.id == id }
 

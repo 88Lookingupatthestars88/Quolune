@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -17,6 +18,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -66,13 +71,20 @@ import com.pagefold.reader.book.Look
 import com.pagefold.reader.book.Match
 import com.pagefold.reader.book.RuleCodec
 import com.pagefold.reader.book.Words
+import androidx.compose.ui.platform.LocalContext
 import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
 import com.pagefold.reader.kit.IconBtn
 import com.pagefold.reader.kit.LocalSkin
+import com.pagefold.reader.kit.Paper
 import com.pagefold.reader.kit.PickChip
 import com.pagefold.reader.kit.T
+import com.pagefold.reader.field.VoiceSource
+import com.pagefold.reader.voice.AiJob
+import com.pagefold.reader.voice.Assign
 import com.pagefold.reader.voice.Catalog
+import com.pagefold.reader.voice.Chat
+import com.pagefold.reader.voice.Chats
 import com.pagefold.reader.voice.Voice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -95,6 +107,22 @@ fun CastScreen(
     book: BookMeta?,
     app: App,
     onChanged: () -> Unit = {},
+    /**
+     * 点某一句下面的「跳到书里」：跳回书里那一处。
+     *
+     * 派角这张纸是叠在阅读页上的，只有阅读页知道怎么翻页，所以这件事往外抛。
+     * 从定音页进来的没有阅读页，给 null —— 那一行就不画箭头。
+     */
+    onJump: ((ch: Int, at: Int) -> Unit)? = null,
+    /** 章节目录。有话要按章分组，没它只能写「第 12 章」。 */
+    chapters: List<com.pagefold.reader.book.Chapter> = emptyList(),
+    /**
+     * 是当一张纸抽上来的（压在阅读页上），还是独占一页（从定音进来）。
+     *
+     * 当纸的时候不要状态栏那一块留白 —— 纸已经在屏幕上半截了，再让一截
+     * 顶上就是一片空白；也不要满屏底色，那是「换了一页」的样子。
+     */
+    sheet: Boolean = false,
     onBack: () -> Unit,
 ) {
     val s = LocalSkin.current
@@ -108,8 +136,10 @@ fun CastScreen(
 
     /** 0 旁白、1 对白。null = 那张纸没开。 */
     var personEdit by remember { mutableStateOf<Int?>(null) }
-    /** 正在给哪个名字挑嗓子。 */
+    /** 正在看谁的话。单人的纸是「他的话 + 嗓子」，组的纸是「嗓子 + 成员」。 */
     var voiceEdit by remember { mutableStateOf<String?>(null) }
+    /** 台账（这本书里谁在说话）开没开。 */
+    var ledger by remember { mutableStateOf(false) }
     /** 正在改第几条规则。-1 = 新加一条。 */
     var ruleEdit by remember { mutableStateOf<Int?>(null) }
     /** 加人那张纸：0 没开、1 选一个还是多个、2 加一个、3 加一批。 */
@@ -135,6 +165,18 @@ fun CastScreen(
     var outBody by remember { mutableStateOf("") }
     /** 这份表动过没有。退出时用它决定要不要让外层重读。 */
     var dirty by remember { mutableStateOf(false) }
+
+    /*
+     * AI 那一趟的状态不在这一页里，在 [AiJob]。纸收起来、人退回书架，
+     * 那一趟照旧往前走 —— 挂在页面上的状态一收就没了。
+     */
+    val aiStamp = AiJob.stamp
+    LaunchedEffect(aiStamp) {
+        if (aiStamp > 0) {
+            cast = loadCast(app, book)
+            dirty = true
+        }
+    }
 
     fun save(next: CastBook, note: String? = null) {
         cast = next
@@ -266,6 +308,17 @@ fun CastScreen(
         panel = ""
     }
 
+    /**
+     * 把「让 AI 排」这张纸摊开。
+     *
+     * 这里只做入口：能不能排、名单够不够、嗓子有没有，[AiJob.begin] 一句答完。
+     * 真正的活在 AiJob 里跑，页面收起来它也不会停。
+     */
+    fun runAi() {
+        val why = AiJob.begin(app, book, cast)
+        if (why != null) say(why)
+    }
+
     val readFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -312,6 +365,32 @@ fun CastScreen(
     val heads = all.sumOf { it.heads }
     val grpN = all.count { it.alt.isNotEmpty() }
 
+    /*
+     * 手机返回键：一层一层退。
+     *
+     * 上一版派角里根本没有这一层，按返回直接落到阅读页 —— 用户说的
+     * 「在派角里按返回也会回到上一个菜单位置，而不是直接到阅读页面」。
+     * 这里的顺序跟下面画纸的顺序**反过来**：后画的在上，先收它。
+     * AiJob 那张纸自带一层（它里面还有「给 AI 的话」「给谁挑一句」）。
+     */
+    BackHandler(enabled = !AiJob.open) {
+        when {
+            panel.isNotEmpty() -> panel = ""
+            ruleEdit != null -> ruleEdit = null
+            allOpen -> allOpen = false
+            wordsOpen -> wordsOpen = false
+            ledger -> ledger = false
+            voiceEdit != null -> closeVoice()
+            grouping -> grouping = false
+            adding > 0 -> { adding = 0; hand = "" }
+            personEdit != null -> personEdit = null
+            else -> {
+                if (dirty) onChanged()
+                onBack()
+            }
+        }
+    }
+
     /* 空嗓子的行实际用对白那副，能不能吃调门看的就是对白那副。 */
     val dialogCan = groups.flatMap { it.second }.firstOrNull { it.name == cast.dialog }?.let { tasty(it) } ?: false
     fun canStyleOf(name: String): Boolean {
@@ -320,8 +399,13 @@ fun CastScreen(
         return if (one == null) dialogCan else tasty(one)
     }
 
-    Box(Modifier.fillMaxSize().background(s.ground)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Box(
+        Modifier.fillMaxSize().background(if (sheet) Color.Transparent else s.ground)
+    ) {
+        Column(
+            Modifier.fillMaxSize()
+                .then(if (sheet) Modifier else Modifier.statusBarsPadding().navigationBarsPadding())
+        ) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -357,7 +441,10 @@ fun CastScreen(
                             modifier = Modifier.weight(1f), maxLines = 1,
                         )
                         val tag = when (state) {
-                            Counts.WORK -> "在数…"
+                            Counts.WORK -> String.format(
+                                "第 %d%% · ",
+                                Counts.pct.intValue
+                            ) + (Counts.note.value.ifBlank { "在数…" })
                             Counts.FAIL -> "重数 ›"
                             Counts.DONE -> "重数"
                             else -> "还没数"
@@ -415,6 +502,70 @@ fun CastScreen(
                             Modifier.weight(1f),
                             enabled = all.isNotEmpty(),
                         )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    /*
+                     * 这是这一页的主动作，所以单独占一整行。
+                     * 没配接口时点它只会说一句「先去定音里填一路接口」—— 不灰掉，
+                     * 灰掉一个按钮没人知道该去哪儿把它点亮。
+                     */
+                    val working = AiJob.step == AiJob.Step.RUN && AiJob.err == null && !AiJob.paused
+                    /*
+                     * 上一版这里写成「怎么分配」，而「怎么分配」是那张纸里面的标题。
+                     * 按钮叫什么，用户是照它猜「点下去会发生什么」的 ——
+                     * 这颗按钮做的事是「让 AI 去排」。
+                     *
+                     * 在排的时候点它 → **回到那个任务**，不许重开一趟（重开就丢了进度）。
+                     */
+                    Btn(
+                        when {
+                            working -> "正在排 · ${AiJob.done}/${AiJob.total} 批"
+                            AiJob.fresh -> "看排好的"
+                            else -> "让 AI 排"
+                        },
+                        { if (AiJob.alive) AiJob.resume() else runAi() },
+                        BtnKind.GHOST,
+                        Modifier.fillMaxWidth(),
+                        enabled = all.isNotEmpty() || AiJob.alive,
+                    )
+                }
+
+                /*
+                 * 书里谁在说话，一章一屏。
+                 *
+                 * 这是「按顺序看」的那一面 —— 角色列表是「按人看」的那一面。
+                 * 两个看法吃同一份数据（句库 + 改派），不会一边改了另一边不动。
+                 */
+                item {
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { if (book != null) ledger = true }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        T("这本书里谁在说话", size = 12, color = if (book == null) s.inkFaint else s.inkDim,
+                            modifier = Modifier.weight(1f))
+                        T(if (book == null) "要进书里才看得到" else "逐章看 ›", size = 10,
+                            color = if (book == null) s.inkFaint else s.flame)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            T("读的时候标出谁在说话", size = 12, color = s.inkDim)
+                            Spacer(Modifier.height(2.dp))
+                            T(
+                                "每段对白前面挂一个名字签，点它就能改这一句归谁。",
+                                size = 10, color = s.inkFaint,
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Pill(cast.mark, { on -> save(cast.copy(mark = on), null) })
                     }
                 }
 
@@ -494,6 +645,8 @@ fun CastScreen(
 
         // ── 纸 ────────────────────────────────────────────
 
+        if (AiJob.open) AiSheet()
+
         personEdit?.let { i ->
             val v = if (i == 0) cast.narrator else cast.dialog
             val st = if (i == 0) cast.narratorStyle else cast.dialogStyle
@@ -540,6 +693,17 @@ fun CastScreen(
                         save(cast.copy(pool = pool, roles = roles), "加上了「$name」")
                         hand = ""
                         adding = 0
+                        /*
+                         * 手写进来的人，句数是 0 —— 那不叫「他没说过话」，那叫「还没数过」。
+                         * 当场按名字把全书跑一遍，把他的话收进句库，句数也补上。
+                         */
+                        val bid = book?.id.orEmpty()
+                        if (bid.isNotBlank()) app.countsRead(bid, name) { n ->
+                            if (n > 0) {
+                                cast = loadCast(app, app.shelf.find(bid))
+                                dirty = true
+                            }
+                        }
                     }
                 },
                 onMany = { raw ->
@@ -613,10 +777,55 @@ fun CastScreen(
             )
         }
 
+        /*
+         * 「改哪个人」这张纸换成「看他的话」那一张。
+         *
+         * 原来点一行只能换嗓子；换完嗓子想问「他到底说了些什么」就没地方去了。
+         * 现在一行点进去先看见他的话，嗓子和调门挪到同一张纸的最上面。
+         */
         voiceEdit?.let { name ->
             val cur = voiceOf(cast, name)
             val members = altOf(cast, name).distinct()
-            VoiceSheet(
+            val isGroup = members.isNotEmpty()
+            if (!isGroup) PersonSheet2(
+                name = name,
+                voice = cur,
+                style = cast.styleOf(name),
+                members = members,
+                groups = groups,
+                canStyle = canStyleOf(name),
+                app = app,
+                bookId = book?.id.orEmpty(),
+                pins = cast.pins,
+                roles = all.map { it.name },
+                chapters = chapters,
+                onJump = onJump,
+                onVoice = { v -> save(cast.copy(roles = cast.roles.map { if (it.name == name) it.copy(voice = v) else it }), null) },
+                onStyle = { st -> save(cast.copy(roles = cast.roles.map { if (it.name == name) it.copy(style = st) else it }), null) },
+                onPin = { qs, who ->
+                    val add = qs.map { q ->
+                        com.pagefold.reader.book.Pin(q.ch, q.at, who, q.text)
+                    }
+                    val keep = cast.pins.filterNot { p ->
+                        qs.any { it.ch == p.ch && it.at == p.at }
+                    }
+                    save(cast.copy(pins = keep + add), "转过去 ${qs.size} 句")
+                },
+                onDelete = {
+                    /*
+                     * 删一个人：角色表、名单里那一格、指着他改的句子，一起收掉。
+                     *
+                     * 只删角色表的话，名单里他还勾着，列表下一帧又照名单画回来 ——
+                     * 看着就是「按了删没反应」。
+                     */
+                    val keep = cast.roles.filter { it.name != name }
+                    val pool = cast.pool.filter { it.name != name }
+                        .map { it.copy(alt = it.alt.filter { a -> a != name }) }
+                    val pins = cast.pins.filter { it.who != name }
+                    save(cast.copy(roles = keep, pool = pool, pins = pins), "删掉了「$name」")
+                    voiceEdit = null
+                },                onClose = { voiceEdit = null },
+            ) else VoiceSheet(
                 name = name,
                 voice = cur,
                 style = cast.styleOf(name),
@@ -713,6 +922,37 @@ fun CastScreen(
                 },
                 onClose = { closeVoice() },
                 self = members.isNotEmpty() && isPerson(cast, name),
+            )
+        }
+
+        if (ledger && book != null) {
+            LedgerSheet(
+                app = app,
+                bookId = book.id,
+                chapters = chapters,
+                /* 一开就停在用户正在读的那一章。 */
+                startCh = app.shelf.find(book.id)?.chapterIndex ?: 0,
+                body = { i -> app.shelf.readChapter(book.id, i) },
+                pins = cast.pins,
+                roles = rowsOf(cast).map { it.name },
+                onPin = { ch, at, who ->
+                    val text = runCatching {
+                        app.shelf.read(book.id).orEmpty()
+                    }.getOrNull().orEmpty()
+                    val chs = chapters
+                    val c = chs.getOrNull(ch)
+                    val body = if (c != null && text.isNotBlank()) {
+                        text.substring(c.start.coerceIn(0, text.length), c.end.coerceIn(0, text.length))
+                    } else ""
+                    val e = if (at >= 0 && at < body.length) {
+                        var k = at
+                        while (k < body.length && body[k] != QUOT_END_1 && body[k] != QUOT_END_2 && body[k] != NL) k++
+                        body.substring(at.coerceIn(0, body.length), k).take(120)
+                    } else ""
+                    val keep = cast.pins.filterNot { it.ch == ch && it.at == at }
+                    save(cast.copy(pins = keep + com.pagefold.reader.book.Pin(ch, at, who, e)), null)
+                },
+                onClose = { ledger = false },
             )
         }
 
@@ -887,7 +1127,18 @@ internal fun rowsOf(cast: CastBook): List<CastRow> {
      */
     val owned = HashMap<String, String>()
     cast.roles.forEach { r -> r.alt.forEach { if (it != r.name) owned[it] = r.name } }
+    /*
+     * 单句改派也要算进句数。
+     *
+     * 名单里那个数（`pool.lines`）是「数人」那一遍扫出来的 —— 它数的是引擎在正文里
+     * 认出他多少次。用户在书里点一句改成他，句库和名单都不知道，于是这个人写着 0 句，
+     * 门槛 100 一筛就发不出去。用户说的「我在阅读页面里已经给他分配了一句话，
+     * 这里应该显示一句」就是这件事。
+     */
+    val pinN = HashMap<String, Int>(16)
+    cast.pins.forEach { p -> if (p.who.isNotBlank()) pinN[p.who] = (pinN[p.who] ?: 0) + 1 }
     val lines = cast.pool.associate { it.name to it.lines }
+    val total = { n: String -> (lines[n] ?: 0) + (pinN[n] ?: 0) }
     /*
      * 组名本人算不算一个人，只看名单里有没有这个名字。
      *
@@ -900,7 +1151,7 @@ internal fun rowsOf(cast: CastBook): List<CastRow> {
     cast.roles.forEach { r ->
         val by = owned[r.name]
         if (by != null && by != r.name) return@forEach
-        val sum = (listOf(r.name) + r.alt).sumOf { lines[it] ?: 0 }
+        val sum = (listOf(r.name) + r.alt).sumOf { total(it) }
         val who = if (r.alt.isEmpty()) emptyList()
         else (if (r.name in inPool) listOf(r.name) else emptyList()) + r.alt
         out.add(CastRow(r.name, r.alt, sum, r.voice, r.tag, if (who.isEmpty()) 1 else who.size, who))
@@ -912,7 +1163,15 @@ internal fun rowsOf(cast: CastBook): List<CastRow> {
          * 名单里的一律当单人。alt 只属于角色表 —— 从名单里再抄一份，组散掉之后
          * 它还挂在那儿，界面上就永远是个散不开的组。
          */
-        out.add(CastRow(p.name, emptyList(), p.lines, ""))
+        out.add(CastRow(p.name, emptyList(), total(p.name), ""))
+    }
+    /*
+     * 只被单句改派提到、名单和角色表里都没有的名字，也要占一行。
+     * 否则「我明明把一句指给他了，列表里找不到这个人」。
+     */
+    pinN.forEach { (n, _) ->
+        if (out.any { it.name == n || n in it.alt }) return@forEach
+        out.add(CastRow(n, emptyList(), total(n), ""))
     }
     /*
      * 组排在最前。
@@ -980,7 +1239,7 @@ private fun splitMany(raw: String): List<String> {
 }
 
 @Composable
-private fun Head(title: String) {
+internal fun Head(title: String) {
     val s = LocalSkin.current
     Spacer(Modifier.height(22.dp))
     T(title, size = 12, color = s.inkDim)
@@ -988,7 +1247,7 @@ private fun Head(title: String) {
 }
 
 @Composable
-private fun MiniLabel(text: String) {
+internal fun MiniLabel(text: String) {
     val s = LocalSkin.current
     T(text, size = 11, color = s.inkDim)
     Spacer(Modifier.height(7.dp))
@@ -1114,36 +1373,18 @@ private fun summarize(pat: String): String {
 // ── 纸 ────────────────────────────────────────────
 
 @Composable
-private fun Sheet(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
-    val s = LocalSkin.current
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-    val cap = maxHeight * 0.86f
-        Box(
-            Modifier.fillMaxSize().background(s.ground.copy(alpha = 0.72f))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onClose() }
-        )
-        Column(
-            Modifier.fillMaxWidth().align(Alignment.BottomCenter)
-                .heightIn(max = cap)
-                .background(s.ground, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                .pointerInput(Unit) { detectTapGestures { } }
-                .imePadding()
-                .navigationBarsPadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 16.dp)
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                T(title, size = 15, weight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                IconBtn(Icons.AutoMirrored.Filled.ArrowBack, "收起", onClose, size = 30.dp)
-            }
-            Spacer(Modifier.height(8.dp))
-            content()
-            Spacer(Modifier.height(18.dp))
-        }
-    }
+internal fun Sheet(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+    /*
+     * 全项目就这一个「纸」的入口，底下是 [Paper]。
+     *
+     * 纸套纸的规矩写在 [Paper] 顶上：子纸必须摆在外层纸**外面**（同级），
+     * 不能写进外层纸的内容里。
+     *
+     * **高度按内容长，最多 0.86。** 上一版一律给 0.80 的定高：改「旁白」那张纸
+     * 只有两排字，底下空着一大片，看着像内容没画出来。给上限让它自己长，
+     * 内容多了到顶再滚 —— 两种都对，定高只对其中一种。
+     */
+    Paper(title = title, onClose = onClose, maxFraction = 0.86f) { content() }
 }
 
 /** 旁白 / 对白的一行：名字 + 现在用的嗓子。 */
@@ -1165,11 +1406,59 @@ private fun PersonRow(label: String, voice: String, onClick: () -> Unit) {
 }
 
 /**
+ * 一个「勾」。勾上是什么、没勾是什么，都写在字里。
+ *
+ * 只写「留」或者「剔」那一个字，用户读不出这是状态还是动作 —— 上一版就是这么被问的。
+ * 所以左边永远有一个勾格（勾上 / 空着），右边是**现在的状态**。
+ */
+@Composable
+private fun Tick(on: Boolean, yes: String, no: String) {
+    val s = LocalSkin.current
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (on) s.flameGhost else Color.Transparent)
+            .border(
+                1.dp,
+                if (on) s.flame.copy(alpha = 0.45f) else s.hair,
+                RoundedCornerShape(7.dp),
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        /*
+         * 勾格里要看得见那个勾。
+         *
+         * 只涂一块实心方块，读起来像「一个色块」而不是「勾上了」——
+         * 截图里就是一个红方块，用户分不出它是勾还是徽标。画成 ✓。
+         */
+        Box(
+            Modifier.width(13.dp).height(13.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(if (on) s.flame else Color.Transparent)
+                .border(
+                    1.dp,
+                    if (on) Color.Transparent else s.inkFaint.copy(alpha = 0.7f),
+                    RoundedCornerShape(3.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (on) {
+                Text("✓", fontSize = 9.sp, color = s.onFlame, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.width(5.dp))
+        T(if (on) yes else no, size = 10, color = if (on) s.flame else s.inkFaint, maxLines = 1)
+    }
+}
+
+/**
  * 旁白 / 对白那张纸。
  *
  * 点一下就存，纸不关 —— 挑嗓子本来就是「挨个听一遍再定」，每挑一次退出去再点回来，
  * 等于把这件事做成了十次往返。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PersonSheet(
     what: String,
@@ -1191,10 +1480,25 @@ private fun PersonSheet(
             T("一副都没开。去定音里开一路声源，这里才有得挑。", size = 11, color = s.inkFaint)
             Spacer(Modifier.height(8.dp))
         } else {
-            groups.forEach { (_, list) ->
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            /*
+             * 换行排，不横滚。
+             *
+             * 上一版是一行 `horizontalScroll`：一排嗓子后面被屏幕切掉半颗，
+             * 用户看不出「后面还有」，也划不动（纸本身还在纵向滚，横向那一层难得吃到手势）。
+             * 能一眼看全的用自动换行，看全了才选得准。
+             */
+            groups.forEach { (g, list) ->
+                if (list.isEmpty()) return@forEach
+                if (g.isNotBlank() && groups.size > 1 && groups.any { it.second.isNotEmpty() }) {
+                    T(g, size = 10, color = s.inkFaint, modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
+                }
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
                     list.forEach { vo ->
-                        PickChip(vo.name, v == vo.name, { v = vo.name; onVoice(vo.name) }, Modifier.padding(end = 6.dp))
+                        PickChip(vo.name, v == vo.name, { v = vo.name; onVoice(vo.name) })
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -1202,29 +1506,44 @@ private fun PersonSheet(
         }
 
         if (canStyle) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(4.dp))
             Lab("调门")
             var write by remember { mutableStateOf(st.isNotBlank() && st !in STYLE_WORDS) }
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
                 STYLE_WORDS.forEach { w ->
-                    PickChip(w, st == w, { st = if (st == w) "" else w; write = false; onStyle(st) }, Modifier.padding(end = 6.dp))
+                    PickChip(w, st == w, { st = if (st == w) "" else w; write = false; onStyle(st) })
                 }
                 PickChip("自己写", write, {
                     write = true
                     if (st in STYLE_WORDS) st = ""
                     onStyle(st)
-                }, Modifier.padding(end = 6.dp))
+                })
             }
             if (write) {
                 Spacer(Modifier.height(8.dp))
                 Field(st, "比如 低沉、急促、带笑", 0) { st = it.take(40); onStyle(st) }
             }
         }
+        Spacer(Modifier.height(4.dp))
+        T(
+            if (canStyle) "点一下当场生效，纸不用关。"
+            else "这副嗓子接不了调门，换一副带「预设」的才有得调。",
+            size = 10, color = s.inkFaint,
+        )
     }
 }
 
 /** 调门的常用写法。填什么都行，这只是省得每次手打。 */
-private val STYLE_WORDS = listOf(
+/* 引号的右半边和换行。直接写字符在 Kotlin 里容易被当成引号本身，收成常量。 */
+internal const val QUOT_END_1 = '\u300D'
+internal const val QUOT_END_2 = '\u201D'
+internal const val NL = '\n'
+
+internal val STYLE_WORDS = listOf(
     "平静", "温和", "严肃", "激昂", "低沉", "讲述",
     "慵懒", "轻快", "清冷", "急促", "耳语", "带笑",
 )
@@ -1671,14 +1990,14 @@ private fun WordsSheet(
 }
 
 @Composable
-private fun Lab(title: String) {
+internal fun Lab(title: String) {
     val s = LocalSkin.current
     T(title, size = 11, color = s.inkDim)
     Spacer(Modifier.height(7.dp))
 }
 
 @Composable
-private fun Field(value: String, hint: String, height: Int = 0, onChange: (String) -> Unit) {
+internal fun Field(value: String, hint: String, height: Int = 0, onChange: (String) -> Unit) {
     val s = LocalSkin.current
     val m = if (height > 0) Modifier.fillMaxWidth().height(height.dp) else Modifier.fillMaxWidth()
     Box(
@@ -1711,4 +2030,681 @@ private fun loadCast(app: App, book: BookMeta?): CastBook {
     val g = app.field.now.castJson
     if (g.isNotBlank()) return heal(RuleCodec.fromJson(g))
     return CastBook(narrator = app.field.now.narratorVoice, dialog = app.field.now.defaultVoice)
+}
+
+/**
+ * 「怎么分配」那张纸。五步，一步一屏。
+ *
+ * 这一步只问一件事，问完才走下一步 —— 上一版是一张纸上什么都问、什么都不清楚。
+ *
+ * 纸套纸的规矩：里面这几张子纸（给 AI 的话、给谁挑一句）都摆在**这张纸后面**，
+ * 同级，后画的压在上面。写进这张纸的内容里会被外层的滚动撑成无限高。
+ */
+@Composable
+private fun AiSheet() {
+    val s = LocalSkin.current
+    val step = AiJob.step
+    val name = when (step) {
+        AiJob.Step.PICK -> "用哪一路"
+        AiJob.Step.DETAIL -> "怎么分配"
+        AiJob.Step.NAMES -> "发哪些人"
+        AiJob.Step.RUN -> "在排"
+        AiJob.Step.PLAN -> "排好了"
+    }
+    /** 「给 AI 的话」开没开。 */
+    var ask by remember { mutableStateOf(false) }
+    /** 正在给谁挑那句台词。 */
+    var pick by remember { mutableStateOf<String?>(null) }
+    /** 结果纸上那两颗按钮各自的确认。 */
+    var askApply by remember { mutableStateOf(false) }
+    var askQuit by remember { mutableStateOf(false) }
+    /** 正在改哪一组现造的音色。 */
+    var editVoice by remember { mutableStateOf<String?>(null) }
+
+    /* 返回键由 [Paper] 那层管：子纸先收，再收这张纸（onClose = AiJob.close）。 */
+
+    Paper(
+        title = name,
+        onClose = { AiJob.close() },
+        maxFraction = if (step == AiJob.Step.NAMES || step == AiJob.Step.PLAN) 0.92f else 0.86f,
+        heightFraction = if (step == AiJob.Step.NAMES || step == AiJob.Step.PLAN) 0.92f else null,
+        scroll = step != AiJob.Step.NAMES && step != AiJob.Step.PLAN,
+    ) {
+        when (step) {
+            AiJob.Step.PICK -> StepPick(s)
+            AiJob.Step.DETAIL -> StepDetail(s)
+            AiJob.Step.NAMES -> StepNames(s, onAsk = { ask = true }, onPick = { pick = it })
+            AiJob.Step.RUN -> StepRun(s)
+            AiJob.Step.PLAN -> StepPlan(
+                s,
+                onApply = { askApply = true },
+                onQuit = { askQuit = true },
+                onEdit = { editVoice = it },
+            )
+        }
+    }
+
+    if (ask) AskSheet { ask = false }
+    pick?.let { who -> PickLineSheet(who) { pick = null } }
+
+    /*
+     * 两张确认纸。
+     *
+     * 「就用这些」会盖掉这本书现在的角色和音色，退出去则是把这一份整份丢掉 ——
+     * 两件事都不可撤回，都得先问一句。上一版右边那颗叫「重排」，点下去又发起一整趟
+     * 请求，而用户想的是「我不想用这份，退出去」。
+     */
+    if (askApply) {
+        val n = AiJob.plan?.groups?.count { it.name in AiJob.use } ?: 0
+        ConfirmSheet(
+            title = "用这一份？",
+            body = "将按这 $n 组重写这本书的角色表：各组的人换成这一组的音色，没选中的组并回「旁白」。" +
+                "现在的对应关系会被盖掉。",
+            ok = "就用这些",
+            onOk = { askApply = false; AiJob.apply() },
+            onClose = { askApply = false },
+        )
+    }
+    if (askQuit) {
+        ConfirmSheet(
+            title = "不看了？",
+            body = "退出会把这一份结果丢掉，角色表一个字都不改。想再排一次，回派角点「让 AI 排」，从头再发一趟。",
+            ok = "退出",
+            kind = BtnKind.DANGER,
+            onOk = { askQuit = false; AiJob.discard() },
+            onClose = { askQuit = false },
+        )
+    }
+    editVoice?.let { who ->
+        GroupVoiceSheet(who) { editVoice = null }
+    }
+}
+
+/**
+ * 一句话的确认纸。
+ *
+ * 不写「确定 / 取消」：两颗按钮上都该写清这一下会发生什么。
+ */
+@Composable
+private fun ConfirmSheet(
+    title: String,
+    body: String,
+    ok: String,
+    kind: BtnKind = BtnKind.PRIMARY,
+    onOk: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val s = LocalSkin.current
+    Paper(title = title, onClose = onClose, maxFraction = 0.56f) {
+        T(body, size = 12, color = s.inkDim)
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("算了", onClose, BtnKind.GHOST, Modifier.weight(1f))
+            Btn(ok, onOk, kind, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * 改一组现造的音色。
+ *
+ * 现造的那一副此刻还只是一个描述 —— 名字要等真造出来才有。所以这里能改两件事：
+ * 把描述改一改，或者干脆换成音色库里现成的一副（那就不用造了）。
+ */
+@Composable
+private fun GroupVoiceSheet(name: String, onClose: () -> Unit) {
+    val s = LocalSkin.current
+    val g = AiJob.plan?.groups?.firstOrNull { it.name == name }
+    if (g == null) { onClose(); return }
+
+    var desc by remember(name, g.desc) { mutableStateOf(g.desc) }
+    val voices = remember { AiJob.voiceAll.toList() }
+
+    Paper(
+        title = "「$name」用什么音色",
+        onClose = onClose,
+        maxFraction = 0.86f,
+        heightFraction = 0.80f,
+        scroll = false,
+    ) {
+        LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+            item(key = "desc") {
+                T("照这句话现造一副", size = 11, color = s.inkDim)
+                Spacer(Modifier.height(6.dp))
+                Field(desc, "比如 中年男声，低沉偏沙，语速慢", 0) { t ->
+                    desc = t.take(60)
+                    AiJob.setGroupVoice(name, "", desc.trim())
+                }
+                Spacer(Modifier.height(14.dp))
+                T("或者用现成的", size = 11, color = s.inkDim)
+                Spacer(Modifier.height(6.dp))
+            }
+            items(voices, key = { it }) { v ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) {
+                            AiJob.setGroupVoice(name, v, "")
+                            onClose()
+                        }
+                        .padding(vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    T(v, size = 12, modifier = Modifier.weight(1f), maxLines = 1)
+                    if (v == g.voice) T("正在用", size = 9, color = s.flame)
+                    Spacer(Modifier.width(6.dp))
+                    T("›", size = 13, color = s.inkFaint)
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.05f)))
+            }
+        }
+    }
+}
+
+/** 第一步：开着的接口不止一路，先问走哪一路。只有一路时这一步根本不出现。 */
+@Composable
+private fun StepPick(s: com.pagefold.reader.kit.Skin) {
+    AiJob.picks.forEach { c ->
+        val hit = c.id == AiJob.chatId
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { AiJob.chatId = c.id }
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                T(c.name, size = 13, color = if (hit) s.ink else s.inkDim, maxLines = 1)
+                Spacer(Modifier.height(2.dp))
+                T((c.model ?: "").ifBlank { "没挑模型" }, size = 10, color = s.inkFaint, maxLines = 1)
+            }
+            T(if (hit) "用这个" else "", size = 10, color = s.flame)
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.06f)))
+    }
+    Spacer(Modifier.height(16.dp))
+    Btn("下一步", { AiJob.step = AiJob.Step.DETAIL }, BtnKind.PRIMARY, Modifier.fillMaxWidth())
+}
+
+/**
+ * 第二步：详细还是简单。
+ *
+ * 两档各占一行，标题下面写的就是它到底发什么 ——「详细」不是形容词，是「多带一句」。
+ */
+@Composable
+private fun StepDetail(s: com.pagefold.reader.kit.Skin) {
+    ModeRow("详细", "把这个人还有一句话发给 AI", AiJob.deep) { AiJob.deep = true }
+    Spacer(Modifier.height(8.dp))
+    ModeRow("简单", "光发姓名和句数", !AiJob.deep) { AiJob.deep = false }
+
+    Spacer(Modifier.height(16.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Btn("返回", { AiJob.back() }, BtnKind.GHOST, Modifier.weight(1f))
+        Btn("下一步", { AiJob.step = AiJob.Step.NAMES }, BtnKind.PRIMARY, Modifier.weight(1f))
+    }
+}
+
+/** 一档。整行都能点，选中的那一档描一道朱边。 */
+@Composable
+private fun ModeRow(title: String, note: String, on: Boolean, onClick: () -> Unit) {
+    val s = LocalSkin.current
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (on) s.flameGhost else Color.Transparent)
+            .border(
+                1.dp,
+                if (on) s.flame.copy(alpha = 0.55f) else s.hair,
+                RoundedCornerShape(11.dp),
+            )
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 13.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            T(title, size = 13, color = if (on) s.flame else s.ink, modifier = Modifier.weight(1f))
+            if (on) T("用这个", size = 10, color = s.flame)
+        }
+        Spacer(Modifier.height(3.dp))
+        T(note, size = 11, color = s.inkDim)
+    }
+}
+
+/**
+ * 第三步：这一趟发哪些人。
+ *
+ * 门槛只是**起手那一下的筛子**。筛完就交了权：想发谁、不发谁，在下面那一列里点。
+ * 点过的人不再跟门槛走 —— 门槛调到 50，也不会把你手点进来的那个 49 句的人踢出去。
+ *
+ * 两档不一样，是用户定的：
+ * · 简单 —— 每行能点「发 / 留」；
+ * · 详细 —— 每行只能换那一句台词（人由门槛定，不再逐行点）。
+ */
+@Composable
+private fun ColumnScope.StepNames(
+    s: com.pagefold.reader.kit.Skin,
+    onAsk: () -> Unit,
+    onPick: (String) -> Unit,
+) {
+    val all = AiJob.pool
+    val on = all.count { it.name in AiJob.sent }
+    T("发 $on 个 · 一共 ${all.size} 个", size = 13)
+    Spacer(Modifier.height(10.dp))
+
+    /* 门槛：一个能写数的格子，默认 50，存进设置，退出再进不变。 */
+    var gateText by remember { mutableStateOf(AiJob.gate.toString()) }
+    LaunchedEffect(AiJob.gate) {
+        if (gateText.toIntOrNull() != AiJob.gate) gateText = AiJob.gate.toString()
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        T("几句话以上才发", size = 12, color = s.inkDim, modifier = Modifier.weight(1f))
+        Box(Modifier.width(104.dp)) {
+            Field(value = gateText, hint = "50", height = 42) { t ->
+                val d = t.filter { it.isDigit() }.take(4)
+                gateText = d
+                d.toIntOrNull()?.let { AiJob.gateTo(it) }
+            }
+        }
+    }
+    Spacer(Modifier.height(4.dp))
+    T(
+        if (AiJob.deep) "这个数只是起手筛一遍。这一档只换句子 —— 想改人，回上一档选简单。"
+        else "这个数只是起手筛一遍。下面是「发」和「不发」：勾着的这一次才发，点一行就换。",
+        size = 10, color = s.inkFaint,
+    )
+    Spacer(Modifier.height(10.dp))
+
+    /*
+     * 名单自己是滚的，表头和底下那两颗按钮钉住。
+     *
+     * 上一版把 255 行直接铺在这张纸的内容里、又把纸设成「内容不滚」——
+     * 于是从「发哪些人」往下翻不动，第 13 个人之后全看不见。
+     * LazyColumn 还顺手解决了「五十万字那本书一进来就建 255 行」。
+     */
+    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+        items(all, key = { it.name }) { p ->
+        val hit = p.name in AiJob.sent
+        Column(
+            Modifier.fillMaxWidth()
+                /*
+                 * 分档，是用户定的：
+                 * · 简单 —— 每行点一下「发 / 留」，人是这儿定的；
+                 * · 详细 —— 只换那一句台词，人不动。
+                 *
+                 * 门槛只是起手筛一遍。想发一个只有 49 句的人、门槛写着 50，
+                 * 就在简单那一档点他一下 —— 点过的人不再跟门槛走。
+                 */
+                .then(
+                    if (AiJob.deep) Modifier else Modifier.clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { AiJob.flip(p.name) }
+                )
+                .padding(vertical = 7.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                T(
+                    p.name, size = 12,
+                    color = if (hit) s.ink else s.inkFaint,
+                    modifier = Modifier.weight(1f), maxLines = 1,
+                )
+                T("${p.lines} 句", size = 9, color = s.inkFaint)
+                if (!AiJob.deep) {
+                    Spacer(Modifier.width(10.dp))
+                    /*
+                     * 两个字都要能读出「现在是什么状态」。
+                     *
+                     * 上一版不发的写「留」，用户问：「点一下『留』到底是留还是剔？」
+                     * 现在勾上写「发」、没勾写「不发」，前面带一个勾格。
+                     */
+                    Tick(hit, "发", "不发")
+                }
+            }
+            if (AiJob.deep) {
+                Spacer(Modifier.height(2.dp))
+                val one = AiJob.sampleOf(p)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    T(
+                        if (one.isBlank()) "（他这一句还没挑）" else "「" + one + "」",
+                        size = 10, color = s.inkFaint,
+                        modifier = Modifier.weight(1f), maxLines = 2,
+                    )
+                    Text(
+                        "换",
+                        fontSize = 10.sp,
+                        color = s.flame,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { onPick(p.name) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.05f)))
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Btn("给 AI 的话", onAsk, BtnKind.GHOST, Modifier.fillMaxWidth())
+
+    Spacer(Modifier.height(16.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Btn("返回", { AiJob.back() }, BtnKind.GHOST, Modifier.weight(1f))
+        Btn("开排", {
+            AiJob.done = 0
+            AiJob.startedAt = 0L
+            AiJob.run()
+        }, BtnKind.PRIMARY, Modifier.weight(1f), enabled = AiJob.sent.isNotEmpty())
+    }
+}
+
+/**
+ * 「给 AI 的话」。
+ *
+ * 两件事：准不准它自己造、准它用哪几副；底下一段是**这一趟真会发出去的原文**。
+ * 长期口径在定音 · 派角，这里改的是这一次。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AskSheet(onClose: () -> Unit) {
+    val s = LocalSkin.current
+    Sheet("给 AI 的话", onClose) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            T("允许它自己造嗓音", size = 13, modifier = Modifier.weight(1f))
+            Pill(AiJob.design, { AiJob.design = it })
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(s.hairSoft))
+
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            T("准它用的嗓子", size = 13, modifier = Modifier.weight(1f))
+            T(
+                "${AiJob.voiceUse.size} / ${AiJob.voiceAll.size}",
+                size = 10, color = s.inkFaint,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        if (AiJob.voiceAll.isEmpty()) {
+            T("音色库里一副都没有。先去定音里开一路声源。", size = 11, color = s.inkFaint)
+        } else {
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                AiJob.voiceAll.forEach { n ->
+                    PickChip(
+                        n,
+                        n in AiJob.voiceUse,
+                        {
+                            AiJob.voiceUse =
+                                if (n in AiJob.voiceUse) AiJob.voiceUse - n else AiJob.voiceUse + n
+                        },
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Btn("全给", { AiJob.voiceUse = AiJob.voiceAll.toSet() }, BtnKind.GHOST)
+                Btn("一副不给", { AiJob.voiceUse = emptySet() }, BtnKind.GHOST)
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(s.hairSoft))
+        Spacer(Modifier.height(12.dp))
+        T("发出去的整段", size = 13)
+        Spacer(Modifier.height(8.dp))
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(s.panelSink)
+                .padding(10.dp)
+        ) {
+            T(AiJob.preview(), size = 9, color = s.inkDim, maxLines = 400)
+        }
+    }
+}
+
+/** 给一个人挑那句台词。从他全部的话里取，不按章分组。 */
+@Composable
+private fun PickLineSheet(who: String, onClose: () -> Unit) {
+    val s = LocalSkin.current
+    val bookId = AiJob.bookId
+    val ctx = LocalContext.current
+    val cand = remember(who, ctx) {
+        if (bookId.isBlank()) emptyList()
+        else com.pagefold.reader.book.Lines.head(ctx, bookId, who, 24)
+    }
+    var draft by remember(who) { mutableStateOf("") }
+    Sheet("给「$who」挑一句", onClose) {
+        if (cand.isEmpty()) {
+            T("句库里没有他的话。手写一句也行。", size = 10, color = s.inkFaint)
+        } else {
+            cand.forEach { q ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) {
+                            AiJob.setPick1(who, q.text)
+                            onClose()
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    T("「" + q.text + "」", size = 11, color = s.inkDim,
+                        modifier = Modifier.weight(1f), maxLines = 2)
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.04f)))
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Field(draft, "也可以自己写一句", 0) { draft = it }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("用这一句", {
+                AiJob.setPick1(who, draft)
+                onClose()
+            }, BtnKind.PRIMARY, Modifier.weight(1f), enabled = draft.isNotBlank())
+            Btn("不要这一句", {
+                AiJob.setPick1(who, "")
+                onClose()
+            }, BtnKind.GHOST, Modifier.weight(1f))
+        }
+    }
+}
+
+/** 第四步：在排。进度是实数 —— 第几批、多少人、过了多久。 */
+@Composable
+private fun StepRun(s: com.pagefold.reader.kit.Skin) {
+    var tick by remember { mutableStateOf(0) }
+    val live = AiJob.err == null && !AiJob.paused
+    LaunchedEffect(live) {
+        while (live) {
+            kotlinx.coroutines.delay(1000)
+            tick++
+        }
+    }
+    val secs = AiJob.seconds() + tick * 0L
+    val all = AiJob.pool.count { it.name in AiJob.sent }
+
+    T(AiJob.stage.ifBlank { "第 ${AiJob.done + 1} 批，正在发" }, size = 13)
+    Spacer(Modifier.height(4.dp))
+    T(
+        if (AiJob.brief.isNotBlank()) AiJob.brief else "一共 ${AiJob.total} 批 · $all 人",
+        size = 11, color = s.inkFaint,
+    )
+    Spacer(Modifier.height(14.dp))
+
+    // 一根进度条。没到 100% 之前它就是「还没完」，别用一句话假装说完。
+    val frac = if (AiJob.total <= 0) 0f else AiJob.done.toFloat() / AiJob.total
+    Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(s.ink.copy(alpha = 0.1f))) {
+        Box(Modifier.fillMaxWidth(frac).height(3.dp).background(s.flame))
+    }
+    Spacer(Modifier.height(6.dp))
+    T("${AiJob.done} / ${AiJob.total} 批" + if (secs > 0) " · 已过 ${secs} 秒" else "", size = 10, color = s.inkFaint)
+
+    AiJob.err?.let { e ->
+        Spacer(Modifier.height(12.dp))
+        T(e, size = 11, color = s.bad)
+    }
+
+    Spacer(Modifier.height(18.dp))
+    if (AiJob.paused || AiJob.err != null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("接着排", { AiJob.run() }, BtnKind.PRIMARY, Modifier.weight(1f))
+            Btn("收起", { AiJob.close() }, BtnKind.GHOST, Modifier.weight(1f))
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn("暂停", { AiJob.pause() }, BtnKind.PRIMARY, Modifier.weight(1f))
+            Btn("收起，回来还在", { AiJob.close() }, BtnKind.GHOST, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        T("收起来它照样在排。排完顶上会出来一条，点它回到这儿。", size = 10, color = s.inkFaint)
+    }
+}
+
+/**
+ * 第五步：结果。
+ *
+ * 摆法跟派角那一页一样：**左边人，右边音色**。
+ *
+ * 上一版每行写两遍同一句描述（一遍带「现造·」前缀、一遍原文），既占了半屏又看不出
+ * 哪一格是名字、哪一格是嗓子。用户的原话是「这里还是有很多问题」。
+ */
+@Composable
+private fun ColumnScope.StepPlan(
+    s: com.pagefold.reader.kit.Skin,
+    onApply: () -> Unit,
+    onQuit: () -> Unit,
+    onEdit: (String) -> Unit,
+) {
+    val p = AiJob.plan ?: return
+    val on = p.groups.filter { it.name in AiJob.use }
+    val newN = on.count { it.desc.isNotBlank() }
+    val heads = on.sumOf { it.members.size }
+
+    T(
+        "新建 $newN 副音色 · $heads 个角色 · ${on.size} 组",
+        size = 14,
+    )
+    Spacer(Modifier.height(10.dp))
+
+    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+        items(p.groups, key = { it.name }) { g ->
+            val hit = g.name in AiJob.use
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { AiJob.use = if (hit) AiJob.use - g.name else AiJob.use + g.name }
+                    .padding(vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                /* 左：人。多人的组把人数写在名字后面，不再单占一行。 */
+                Column(Modifier.weight(1f)) {
+                    T(
+                        g.name + if (g.members.size > 1) " · ${g.members.size} 人" else "",
+                        size = 13, color = if (hit) s.ink else s.inkFaint, maxLines = 1,
+                    )
+                    val more = g.members.filter { it != g.name }
+                    if (more.isNotEmpty()) {
+                        Spacer(Modifier.height(2.dp))
+                        T(more.joinToString("、"), size = 10, color = s.inkFaint, maxLines = 1)
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                /*
+                 * 右：音色。
+                 *
+                 * 现造的可以点进去改 —— 它只是一个描述，还没造出来；现成的那几副是
+                 * 音色库里的东西，这一页不该改它（要换就在上面那一列点别组）。
+                 */
+                if (g.desc.isNotBlank()) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, s.flame.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) { onEdit(g.name) }
+                            .padding(horizontal = 9.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        T("现造", size = 10, color = s.flame)
+                        Spacer(Modifier.width(4.dp))
+                        T("改", size = 10, color = s.flame)
+                    }
+                } else {
+                    T(
+                        g.voice.ifBlank { "对白那副" },
+                        size = 11, color = if (hit) s.inkDim else s.inkFaint, maxLines = 1,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Tick(hit, "用", "不用")
+            }
+            if (g.desc.isNotBlank()) {
+                Spacer(Modifier.height(1.dp))
+                T(g.desc, size = 10, color = s.inkFaint, maxLines = 1)
+                Spacer(Modifier.height(6.dp))
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.06f)))
+        }
+
+        if (p.drop.isNotEmpty()) {
+            item(key = "dropHead") {
+                Spacer(Modifier.height(14.dp))
+                T("它判成不是人名的 ${p.drop.size} 个", size = 11, color = s.inkDim)
+                Spacer(Modifier.height(2.dp))
+                T(
+                    "勾上「留下」：还是发出去，跟着对白那副嗓子念。不勾就是这次不用它们，表里不会多出这个人。",
+                    size = 10, color = s.inkFaint,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+            items(p.drop, key = { "d" + it.name }) { d ->
+                val held = d.name in AiJob.keep
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) { AiJob.keep = if (held) AiJob.keep - d.name else AiJob.keep + d.name }
+                        .padding(vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    T(d.name, size = 12, color = if (held) s.ink else s.inkDim, modifier = Modifier.weight(1f))
+                    T(d.why, size = 10, color = s.inkFaint, maxLines = 1)
+                    Spacer(Modifier.width(8.dp))
+                    Tick(held, "留下", "不要")
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Btn("就用这些", onApply, BtnKind.PRIMARY, Modifier.weight(1f), enabled = on.isNotEmpty())
+        Btn("退出", onQuit, BtnKind.GHOST, Modifier.weight(1f))
+    }
 }

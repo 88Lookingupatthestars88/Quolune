@@ -65,6 +65,14 @@ data class CastName(
     val sex: String = "",
     /** 别的叫法。书里一处写「邮差小陈」、一处只写「小陈」，两种都得认。 */
     val alt: List<String> = emptyList(),
+    /**
+     * 他说过的一句话，四十字以内。
+     *
+     * 只为一件事：派角时让模型看得出这人是什么身份。
+     * 光给名字，它只能按字面猜；给一句台词，「末将听令」和「臣以为不可」就分得开。
+     * 数是顺手拿的（[com.pagefold.reader.book.Look.speakers] 那一遍扫描），不额外扫书。
+     */
+    val sample: String = "",
 )
 
 /** 一个角色：名字 + 嗓子 + 调门。嗓子空 = 用白口那副。 */
@@ -130,7 +138,26 @@ data class CastBook(
     val sex: Map<String, String> = emptyMap(),
     /** 用户点掉的词。题材包里点了不要的，收在这一串里，合成词表时减掉。 */
     val off: List<String> = emptyList(),
+    /**
+     * 单句改派。规则认出来的人被它盖掉，只认这一个位置。
+     *
+     * 跟 [rules] 是两层：规则改一个会影响成千上万句，改一句不该动规则。
+     * 见 [Pin]。
+     */
+    val pins: List<Pin> = emptyList(),
+    /** 读的时候在每段对白前面标出是谁在说话。这本书自己的开关，跟念法同一层。 */
+    val mark: Boolean = false,
+    /**
+     * 这本书自己的「怎么分」。空 = 跟全局那一段（[Settings.aiPrompt]），再空就跟出厂那份。
+     *
+     * 为什么按书存：同一套分派口径，古装戏和都市戏不是一回事。
+     * 但也不该逼人每本重写一遍 —— 所以默认跟全局，改过才单存。
+     */
+    val prompt: String = "",
 ) {
+
+    /** 这一处在哪一句已经改派过。没有就是 null。 */
+    fun pinAt(ch: Int, at: Int): Pin? = pins.firstOrNull { it.ch == ch && it.at == at }
     /** 全部叫法：角色自身的名字与别名。 */
     fun ways(): List<String> = roles.flatMap { it.ways() }.distinct()
 
@@ -162,6 +189,7 @@ data class CastBook(
     fun without(role: String): CastBook = copy(
         roles = roles.filter { it.name != role },
         rules = rules.filter { it.character != role },
+        pins = pins.filter { it.who != role },
     )
 }
 
@@ -192,6 +220,18 @@ object RuleCodec {
     private fun alts(o: com.google.gson.JsonObject?): List<String> = runCatching {
         o?.getAsJsonArray("alt")?.mapNotNull { e -> runCatching { e.asString }.getOrNull() }
             ?.filter { it.isNotBlank() }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    /** 单句改派那张表。老存档没有这个键，给空表。 */
+    private fun pinsOf(root: com.google.gson.JsonObject): List<Pin> = runCatching {
+        root.getAsJsonArray("pins")?.mapNotNull { el ->
+            val o = runCatching { el.asJsonObject }.getOrNull() ?: return@mapNotNull null
+            val who = str(o, "who")
+            val ch = runCatching { o.get("ch")?.asInt }.getOrNull() ?: -1
+            val at = runCatching { o.get("at")?.asInt }.getOrNull() ?: -1
+            if (who.isBlank() || ch < 0 || at < 0) null
+            else Pin(ch, at, who, str(o, "text"))
+        }.orEmpty()
     }.getOrDefault(emptyList())
 
     fun toJson(cast: CastBook): String {
@@ -229,6 +269,7 @@ object RuleCodec {
                     addProperty("lines", n.lines)
                     addProperty("on", n.on)
                     if (n.sex.isNotBlank()) addProperty("sex", n.sex)
+                    if (n.sample.isNotBlank()) addProperty("sample", n.sample)
                     if (n.alt.isNotEmpty()) add("alt", arr(n.alt))
                 })
             }
@@ -252,6 +293,20 @@ object RuleCodec {
             root.add("sex", sex)
         }
         if (cast.off.isNotEmpty()) root.add("off", arr(cast.off))
+        if (cast.mark) root.addProperty("mark", true)
+        if (cast.prompt.isNotBlank()) root.addProperty("prompt", cast.prompt)
+        if (cast.pins.isNotEmpty()) {
+            val ps = com.google.gson.JsonArray()
+            cast.pins.forEach { p ->
+                ps.add(com.google.gson.JsonObject().apply {
+                    addProperty("ch", p.ch)
+                    addProperty("at", p.at)
+                    addProperty("who", p.who)
+                    if (p.text.isNotBlank()) addProperty("text", p.text)
+                })
+            }
+            root.add("pins", ps)
+        }
         return gson.toJson(root)
     }
 
@@ -307,6 +362,7 @@ object RuleCodec {
                             on = runCatching { o.get("on")?.asBoolean }.getOrNull() ?: false,
                             sex = str(o, "sex"),
                             alt = alts(o),
+                            sample = str(o, "sample"),
                         )
                     }
                 }
@@ -330,6 +386,9 @@ object RuleCodec {
                 extraTitle = strList("extraTitle"),
                 sex = sex,
                 off = strList("off"),
+                pins = pinsOf(root),
+                mark = runCatching { root.get("mark")?.asBoolean }.getOrNull() ?: false,
+                prompt = str(root, "prompt"),
             ).let { b0 ->
                 /*
                  * 类别名换真名。
@@ -643,7 +702,7 @@ object Cast {
      * @param chunk 单行上限。超过就找最近的句末切一刀 —— 太长的段一次合成等得久，
      *              而且服务端会静默截断。0 = 不切。
      */
-    fun plan(text: String, p: CastProfile, chunk: Int = 800): List<Line> {
+    fun plan(text: String, p: CastProfile, chunk: Int = 800, pins: Map<Int, String> = emptyMap()): List<Line> {
         val out = ArrayList<Line>(256)
         var lastSpeaker: String? = null
         var beforeLastSpeaker: String? = null
@@ -718,14 +777,30 @@ object Cast {
                 // 规则里写了嗓子就用它；没写就按名字查一次；再没有就用白口那副。
                 val voice = hit?.voice?.takeIf { it.isNotBlank() }
                     ?: (if (name != null) voiceFor(name, p) else p.defaultVoice)
+                /*
+                 * 单句改派。
+                 *
+                 * pins 的键是「这一句在本章正文里的起点」，跟 Line.srcStart 同一把尺子。
+                 * 上一版只把 pin 画进名字签，念的时候仍是引擎认的那个人 ——
+                 * 用户改完一句，看着改了，听着没改。这里在切块那一层盖掉。
+                 */
+                var who0: String? = null
                 cut(para, seg.from, seg.to, chunk) { a, b ->
                     Wash.of(para.substring(a, b)).takeIf { it.isNotBlank() }?.let { t ->
-                        out.add(Line(t, true, name.orEmpty(), voice, base + a, base + b, name?.let { p.styles[it] }.orEmpty()))
+                        val w = pins[base + a] ?: name
+                        val v = when {
+                            w == name -> voice
+                            w != null -> voiceFor(w, p)
+                            else -> p.defaultVoice
+                        }
+                        out.add(Line(t, true, w.orEmpty(), v, base + a, base + b, w?.let { p.styles[it] }.orEmpty()))
+                        who0 = w
                     }
                 }
-                if (name != null) {
+                val now = who0
+                if (now != null) {
                     beforeLastSpeaker = lastSpeaker
-                    lastSpeaker = name
+                    lastSpeaker = now
                 }
                 if (absB <= absA) continue
             }

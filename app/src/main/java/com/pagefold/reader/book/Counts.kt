@@ -1,6 +1,7 @@
 package com.pagefold.reader.book
 
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import com.pagefold.reader.App
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +29,12 @@ object Counts {
     /** 界面读它就知道该重画了。 */
     val version = mutableIntStateOf(0)
 
+    /** 正在干活的那句话，摆给界面看。「第 12/46 章」这种。空 = 没在忙。 */
+    val note = mutableStateOf("")
+
+    /** 进度：0–100。0 = 没在跑。 */
+    val pct = mutableIntStateOf(0)
+
     private val state = ConcurrentHashMap<String, Int>()
     private val pool = Executors.newSingleThreadExecutor { r ->
         /*
@@ -54,7 +61,20 @@ object Counts {
     fun ensure(app: App, meta: BookMeta) {
         if (state.containsKey(meta.id)) return
         val cur = castOf(app, app.shelf.find(meta.id) ?: meta)
-        if (cur.pool.isNotEmpty()) {
+        /*
+         * 名单已经有了，但一个人一句台词样例都没有 —— 那是老版本数的。
+         *
+         * 样例是派角时让大模型判身份的唯一依据（「末将听令」是武将，「臣不可」是文臣）。
+         * 没有它，AI 只能按名字的字面猜。所以碰到这种名单，补数一次；
+         * 数完这一遍之后就有样例了，不会再数第三遍。
+         */
+        val noSample = cur.pool.isNotEmpty() && cur.pool.none { it.sample.isNotBlank() }
+        /*
+         * 名单有了、样例也有了，但句库没建过 —— 上一版没有句库。
+         * 这一条是升版之后第一次进书的唯一代价：得再扫一遍。
+         */
+        val noLines = cur.pool.isNotEmpty() && !Lines.has(app, meta.id)
+        if (cur.pool.isNotEmpty() && !noSample && !noLines) {
             state[meta.id] = DONE
             version.intValue++
             return
@@ -76,12 +96,20 @@ object Counts {
     private fun start(app: App, meta: BookMeta) {
         state[meta.id] = WORK
         version.intValue++
+        note.value = ""
+        pct.intValue = 0
         val id = meta.id
         scope.launch {
             var end = FAIL
             try {
                 val raw = app.shelf.read(id)
                 if (!raw.isNullOrBlank()) {
+                    /*
+                     * 章要先切出来。句库按章编号，没这张表就不知道该往哪一章记。
+                     * 切一次会落盘（Chapters 自己有缓存），下次直接读。
+                     */
+                    note.value = "切章"
+                    val chs = com.pagefold.reader.book.Chapters.of(app, meta, raw)
                     val list = Look.speakers(raw, 400)
                     val custom = Look.customs(raw)
                     if (list.isNotEmpty()) {
@@ -98,6 +126,8 @@ object Counts {
                             marked += n.copy(
                                 on = old[n.name]?.on ?: true,
                                 alt = old[n.name]?.alt.orEmpty(),
+                                sample = if (n.sample.isNotBlank()) n.sample
+                                else old[n.name]?.sample.orEmpty(),
                             )
                         }
                         /*
@@ -123,6 +153,37 @@ object Counts {
                             sex = cur.sex.filterKeys { n -> marked.any { it.name == n } },
                         )
                         app.shelf.setCast(id, RuleCodec.toJson(next))
+
+                        /*
+                         * 句库。名单出来的那几个人才收 —— 名单外的不存，免得存一屋子垃圾。
+                         * 走到这儿一定是「补扫」：要么没建过，要么用户点了「重新数」。
+                         */
+                        note.value = "记他的话"
+                        Lines.build(
+                            app, id, raw, chs, marked.map { it.name },
+                        ) { done, all ->
+                            pct.intValue = if (all == 0) 0 else done * 100 / all
+                            note.value = "第 $done/$all 章"
+                        }
+                        /*
+                         * 句数以句库为准。
+                         *
+                         * 数人那一遍数出来的是「他当主语的次数」，句库存的是「他真说的话」。
+                         * 两个数不一样 —— 列表上写一个、点进去看见另一个，用户会以为
+                         * 有一边在骗他。所以统一成句库那个：点进去数得出来的，就是列表上那个。
+                         */
+                        val cnt = Lines.index(app, id)
+                        val sync = app.shelf.find(id) ?: meta
+                        val cb = castOf(app, sync)
+                        app.shelf.setCast(
+                            id,
+                            RuleCodec.toJson(
+                                cb.copy(pool = cb.pool.map { p ->
+                                    val n = cnt[p.name]
+                                    if (n != null) p.copy(lines = n) else p
+                                })
+                            )
+                        )
                         end = DONE
                     }
                 }
@@ -132,6 +193,8 @@ object Counts {
                 // 连 OutOfMemoryError 也要落一个状态：不然界面永远停在「正在数」。
                 end = FAIL
             }
+            note.value = ""
+            pct.intValue = 0
             state[id] = end
             version.intValue++
         }

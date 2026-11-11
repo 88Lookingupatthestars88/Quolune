@@ -16,6 +16,14 @@ import kotlinx.coroutines.launch
 /** 翻页方式。 */
 enum class TurnMode { FLIP, SCROLL, CHAPTER }
 
+/**
+ * `Settings.aiVoices` 里表示「一副都不给」的那一格。
+ *
+ * 空串是「还没定过 = 库里有的全给」，所以「一副都不给」必须另有一个记号 ——
+ * 不然用户把最后一副点掉，画面会自己又全亮回来，看着像点了没反应。
+ */
+const val AI_NO_VOICE = "-"
+
 /** 朗读引擎。 */
 enum class EngineKind { MIMO, SYSTEM }
 
@@ -31,6 +39,13 @@ data class Settings(
     val shelfDim: Int = 55,             // 旧字段，界面上已经不给调了
     val bgJson: String = "",            // {"shelf":"image:/…|0.6|0|0|1.0", …}
     val enginesJson: String = "",       // 嗓子列表
+    /**
+     * 会想事的那几路接口（派角时用）。
+     *
+     * 跟嗓源分开存：念书和拿主意是两件事，模型名、计费、限流都不一样。
+     * 老存档里没有这一格 → 空串 → 读出出厂那一排（地址已经填好，只差钥匙）。
+     */
+    val chatJson: String = "",
 
     // 头一屏是哪一页。3 = 定音。
     //
@@ -95,9 +110,51 @@ data class Settings(
 
     // 缓存（只用来显示，不再自动删）
     val cacheMaxMb: Int = 0,
+
+    // ── 怎么分配（让 AI 分组派嗓子） ──
+    /**
+     * 「几句话以上才发」。用户自己写，默认 50。
+     *
+     * 以前写死 3，还只能加减；退出再进来又变回 3 —— 那是它根本没存。
+     * 现在存这一格，进来读到什么就是什么。
+     */
+    val aiGate: Int = 50,
+    /**
+     * 发给 AI 的那段「怎么分」的说明。空 = 用出厂那份。
+     *
+     * 书里那本自己还存一份（在 castJson 的 prompt 字段），优先级更高。
+     * 用户在这本书里改过，就不动全局；点「存成默认」才写回这一格。
+     */
+    val aiPrompt: String = "",
+    /**
+     * 准 AI 自己造嗓音。
+     *
+     * 只有能造的那一路开着（目前是小米）才作数；没有这一格时派角永远是「从现成的里挑」。
+     * 书里那张纸还能临时改，但**起手的那一档在这里定** —— 用户不想每本书都去点一次。
+     */
+    val aiDesign: Boolean = false,
+    /**
+     * 准它用的那几副嗓子，逗号分隔。空 = 库里有的全给。
+     *
+     * 存名字不存 id：嗓子是用户自己看名字认的，id 换了人还得重选一遍。
+     */
+    val aiVoices: String = "",
 ) {
     val turn: TurnMode get() = runCatching { TurnMode.valueOf(turnMode) }.getOrDefault(TurnMode.FLIP)
     val engineKind: EngineKind get() = runCatching { EngineKind.valueOf(engine) }.getOrDefault(EngineKind.MIMO)
+
+    /** 准它用的那几副嗓子。null = 还没定过（那就是库里有的全给）。 */
+    val aiVoiceSet: Set<String>?
+        get() = when {
+            aiVoices.isBlank() -> null
+            aiVoices.trim() == AI_NO_VOICE -> emptySet()
+            else -> aiVoices.split(',', '，', '\n')
+                .map { it.trim() }.filter { it.isNotBlank() }.toSet()
+        }
+
+    /** 能造嗓音的那一路（小米）开着没有。 */
+    val canDesign: Boolean
+        get() = engines.any { it.on && it.src == VoiceSource.MIMO }
 
     /**
      * 声源表。**这一句会被界面每帧调到**，所以绝不许抛。
@@ -119,6 +176,19 @@ data class Settings(
             EnginesCache.hit(key)?.let { return it }
             val v = runCatching { Engines.decode(key) }.getOrDefault(Engines.DEFAULT)
             EnginesCache.put(key, v)
+            return v
+        }
+
+    /**
+     * 接口表。跟 [engines] 一样要缓存 —— 这个 getter 也会被界面每帧叫到。
+     */
+    val chats: List<com.pagefold.reader.voice.ChatCfg>
+        get() {
+            val key = chatJson
+            ChatCache.hit(key)?.let { return it }
+            val v = runCatching { com.pagefold.reader.voice.Chats.decode(key) }
+                .getOrDefault(com.pagefold.reader.voice.Chats.DEFAULT)
+            ChatCache.put(key, v)
             return v
         }
 
@@ -155,6 +225,9 @@ data class Settings(
     }
 
     fun withEngines(list: List<EngineCfg>): Settings = copy(enginesJson = Engines.encode(list))
+
+    fun withChats(list: List<com.pagefold.reader.voice.ChatCfg>): Settings =
+        copy(chatJson = com.pagefold.reader.voice.Chats.encode(list))
 }
 
 /**
@@ -189,6 +262,19 @@ object Pages {
     )
 
     fun name(key: String): String = ALL.firstOrNull { it.first == key }?.second ?: key
+}
+
+/** 接口表的解析结果，按存档原文记一份。跟 [EnginesCache] 一个道理。 */
+private object ChatCache {
+    private var key: String? = null
+    private var val_: List<com.pagefold.reader.voice.ChatCfg>? = null
+
+    fun hit(k: String): List<com.pagefold.reader.voice.ChatCfg>? = if (k == key) val_ else null
+
+    fun put(k: String, v: List<com.pagefold.reader.voice.ChatCfg>) {
+        key = k
+        val_ = v
+    }
 }
 
 /** 声源表的解析结果，按存档原文记一份。 */

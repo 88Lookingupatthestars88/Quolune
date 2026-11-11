@@ -456,6 +456,10 @@ object Look {
 
     private fun count(text: String, n: Int, max: Int): List<CastName> {
 
+        /** 中文书里认得出是引号的那几个。半角那个也算，有的书写一半。 */
+        val QUOTES = "\u201C\u300C\u300E\u0022"
+
+
         val tbl = dict
         val adv = advDict
 
@@ -649,6 +653,42 @@ object Look {
          * 这一条不靠排除表，所以换一本书也成立。
          */
         val known = BooleanArray(names.size)
+
+        /*
+         * 每人一句他说过的话，四十字以内。只为派角时判身份用。
+         *
+         * 就在下面这一遍扫描里顺手拿，不多扫一遍书 —— 三百多万字的书，
+         * 多扫一遍就是多好几秒。拿的位置是「名字 + 说类动词 + 引号」那一处，
+         * 引号里第一句就是。
+         */
+        val samp = arrayOfNulls<String>(names.size)
+
+        /** [p] 起往后找第一个引号，把引号里那一句掐四十字回来。没有就给空串。 */
+        fun sampleAt(p: Int): String {
+            var k = p
+            val lim = minOf(n, p + 14)
+            while (k < lim && text[k] !in QUOTES) k++
+            if (k >= lim) return ""
+            val open = text[k]
+            val close = when (open) {
+                '\u201C' -> '\u201D'
+                '\u300C' -> '\u300D'
+                '\u300E' -> '\u300F'
+                else -> '"'
+            }
+            val end = minOf(n, k + 1 + 64)
+            val sb = StringBuilder(48)
+            var e2 = k + 1
+            while (e2 < end) {
+                val c = text[e2]
+                if (c == close || c == '\n' || c == '\r') break
+                sb.append(c)
+                e2++
+            }
+            val t = sb.toString().trim()
+            // 引号里只有一两个字的多半是「嗯」「是」，判不了身份，宁可给空。
+            return if (t.length >= 4) t.take(40) else ""
+        }
         /* 全书总出现、后跟「地/得」、当引导语的次数。三样都在这一遍里数完。 */
         val allN = IntArray(names.size)
         val diN = IntArray(names.size)
@@ -668,7 +708,11 @@ object Look {
             val e = i + use
             allN[v]++
             if (e < n && (text[e] == '地' || text[e] == '得')) diN[v]++
-            if (e < n && (text[e] == '：' || text[e] == ':')) { known[v] = true; cntN[v]++; i = e; continue }
+            if (e < n && (text[e] == '：' || text[e] == ':')) {
+                known[v] = true; cntN[v]++
+                if (samp[v].isNullOrEmpty()) sampleAt(e + 1).let { if (it.isNotEmpty()) samp[v] = it }
+                i = e; continue
+            }
             var p2 = e
             var skips = 0
             while (skips < 3) {
@@ -677,7 +721,10 @@ object Look {
                 if (!more) break
                 skips++
             }
-            if (verbAt(p2)) { known[v] = true; cntN[v]++ }
+            if (verbAt(p2)) {
+                known[v] = true; cntN[v]++
+                if (samp[v].isNullOrEmpty()) sampleAt(p2).let { if (it.isNotEmpty()) samp[v] = it }
+            }
             i = e
         }
 
@@ -837,7 +884,7 @@ object Look {
             if (head < 1 || c > head * 3 + 8) continue
             val k = id.getValue(w)
             if (!passes(w, c, allN[k], diN[k], headN[w] ?: 0, cntN[k], headComma[w] ?: 0)) continue
-            out.add(CastName(w, c))
+            out.add(CastName(w, c, sample = samp[k].orEmpty()))
         }
         out.sortByDescending { it.lines }
         return if (max > 0 && out.size > max) out.subList(0, max) else out

@@ -19,8 +19,8 @@ object Chapters {
 
     private const val MAGIC = 0x544C4348 // TLCH
 
-    fun of(app: App, book: BookMeta, text: String): List<Chapter> {
-        val dir = File(app.filesDir, "ch").apply { mkdirs() }
+    fun of(ctx: android.content.Context, book: BookMeta, text: String): List<Chapter> {
+        val dir = File(ctx.filesDir, "ch").apply { mkdirs() }
         val f = File(dir, book.id + ".idx")
         val sig = sigOf(text)
 
@@ -31,6 +31,39 @@ object Chapters {
         val cut = Parse.split(text)
         runCatching { save(f, sig, cut) }
         return cut
+    }
+
+    /**
+     * 只读落盘的那份目录，不切、不比对指纹。
+     *
+     * 台账一屏一章地翻，它只要「第 N 章从第几个字到第几个字」。
+     * 走 [of] 的话要把整本正文读进内存重算指纹 —— 三百万字的书，
+     * 点一下台账就是七兆字符进堆。这里只读那几十 KB 的索引。
+     *
+     * 没建过目录（还没进过这本书）就是 null，调用方自己说一句。
+     */
+    fun cached(ctx: Context, id: String): List<Chapter>? {
+        val f = File(File(ctx.filesDir, "ch"), "$id.idx")
+        if (!f.exists()) return null
+        return runCatching { loadAny(f) }.getOrNull()
+    }
+
+    private fun loadAny(f: File): List<Chapter>? {
+        DataInputStream(f.inputStream().buffered()).use { i ->
+            if (i.readInt() != MAGIC) return null
+            i.readLong()
+            val n = i.readInt()
+            if (n <= 0 || n > 200_000) return null
+            val out = ArrayList<Chapter>(n)
+            repeat(n) {
+                val idx = i.readInt()
+                val s = i.readInt()
+                val e = i.readInt()
+                val title = i.readUTF()
+                out.add(Chapter(idx, title, s, e))
+            }
+            return out
+        }
     }
 
     /** 清掉某本书的目录缓存（正文被替换、删书时用）。 */

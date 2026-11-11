@@ -18,6 +18,7 @@
 
     <application
         android:name=".App"
+        android:largeHeap="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -41,13 +42,20 @@
             系统级朗读引擎。三件事缺一不可：
             1. action TTS_SERVICE + category DEFAULT，系统才扫得到
             2. meta-data android.speech.tts 指向 tts_engine.xml，设置页的齿轮才有地方跳
-            3. permission BIND_TTS_SERVICE，只让系统绑
+            3. exported=true，别的应用才绑得进来
+
+            **不要**写 android:permission="android.permission.BIND_TTS_SERVICE"。
+            那条是 signature 级：只有跟 framework 同签名的调用方才过得了这一关。
+            系统设置页是平台签名的，绑得上，所以「听个示例」正常；
+            普通应用绑定就直接被拒 —— 报的正是
+            "Not allowed to bind to service { act=android.intent.action.TTS_SERVICE }"。
+            第三方引擎（讯飞、RHVoice 那一类）都不声明这条权限，就是为了让普通应用能绑。
+            这里没有要护的东西：字进来，声出去，绑上也无非是能念字。
         -->
         <service
             android:name=".play.TtsEngine"
             android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_TTS_SERVICE">
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.intent.action.TTS_SERVICE" />
                 <category android:name="android.intent.category.DEFAULT" />

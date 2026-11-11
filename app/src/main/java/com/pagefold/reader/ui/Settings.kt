@@ -91,7 +91,9 @@ import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
 import com.pagefold.reader.kit.Hint
 import com.pagefold.reader.kit.IconBtn
+import com.pagefold.reader.voice.Assign
 import com.pagefold.reader.voice.Auth
+import com.pagefold.reader.voice.Catalog
 import com.pagefold.reader.voice.Speak
 import com.pagefold.reader.voice.Voice
 import com.pagefold.reader.voice.Why
@@ -172,6 +174,7 @@ private fun TuneScreen(
     val skin = LocalSkin.current
     val scope = rememberCoroutineScope()
     val engines = remember(s.enginesJson) { s.engines }
+    val chats = remember(s.chatJson) { s.chats }
 
     var pickFor by remember { mutableStateOf<String?>(null) }
     var homeAsk by remember { mutableStateOf(false) }
@@ -334,8 +337,81 @@ private fun TuneScreen(
                 }
             }
 
+            // ── 接口 ──
+            //
+            // 这一节跟上面那七家不是一回事：上面是「把字念成声音」，这里是「替人拿主意」。
+            // 目前只给派角用一次 —— 让它把名单分成组、每组派一副嗓子。
             item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 22.dp)) }
-            // ── 读法 ──
+            item { Chapter("接口") }
+            /*
+             * 这行字回答「这一节跟上面那七家有什么区别」——上面是把字念成声音，
+             * 这里是「替人拿主意」，而且只服务派角那一件事。不写清楚，用户会以为
+             * 填了这里念书就换嗓子了。
+             */
+            item {
+                Box(Modifier.padding(horizontal = Sz.gutter).padding(bottom = 10.dp)) {
+                    Text(
+                        "此接口用于派角中的「让 AI 排」所使用的 AI 提供商。",
+                        fontSize = 11.sp, color = skin.inkFaint, lineHeight = 17.sp,
+                    )
+                }
+            }
+            item {
+                Box(Modifier.padding(horizontal = Sz.gutter)) {
+                    Quiet {
+                        chats.forEachIndexed { i, c ->
+                            if (i > 0) Hair()
+                            ChatBlock(
+                                e = c,
+                                app = app,
+                                onToggle = { on ->
+                                    app.field.edit { st ->
+                                        st.withChats(chats.map { if (it.id == c.id) it.copy(on = on) else it })
+                                    }
+                                },
+                                onEdit = { fixed ->
+                                    app.field.edit { st ->
+                                        st.withChats(chats.map { if (it.id == fixed.id) fixed else it })
+                                    }
+                                },
+                            )
+                        }
+                        Hair()
+                    }
+                }
+            }
+
+            item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 22.dp)) }
+            // ── 派角 ──
+            //
+            // 这一节是**起手那一档**：每本书点「让 AI 排」时先照这里，书里还能临时改。
+            // 没有这一节，用户每换一本书都得重新点一遍「准它造」「准用哪几副」。
+            item { Chapter("派角") }
+            item {
+                Box(Modifier.padding(horizontal = Sz.gutter)) {
+                    Quiet {
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            RowLine("准它自己造嗓音") {
+                                Pill(s.aiDesign) { on ->
+                                    if (on && !s.canDesign) {
+                                        msg = "造嗓音要小米那一路开着。先去「声源」里把它拨开"
+                                    } else {
+                                        app.field.edit { it.copy(aiDesign = on) }
+                                    }
+                                }
+                            }
+                            Hair()
+                            Spacer(Modifier.height(8.dp))
+                            AiVoicePick(s, app) { msg = it }
+                            Hair()
+                            Spacer(Modifier.height(8.dp))
+                            AiAskField(s, app) { msg = it }
+                        }
+                    }
+                }
+            }
+
+            // ── 新书照这个来 ──
             //
             // 这一节只管**新收进来的书**。已经进库的书各有各的版式，
             // 在这里拨动它们不会跟着变 —— 要改那一本，进那本书的「这一本怎么读」。
@@ -1286,6 +1362,177 @@ private fun VoiceBlock(
 }
 
 /**
+ * 「这家有哪些模型」—— 进程级的一份备忘。
+ *
+ * 为什么要挪出这一行：定音是 LazyColumn，滚出屏幕的那段会被丢掉，滚回来是重新组合，
+ * `remember` 里的东西一律从零开始。清单放在行内，等于每滑一次重新要一次，
+ * 还得重新等 0.8 秒。用户说的「不要每次一滑动，它就重新拉取一次」就是它。
+ *
+ * 键是「地址 + 钥匙」。换一把钥匙当然要重新问；同一把钥匙滚进滚出、退出定音再进来，
+ * 都是现成的。跟声源那边「验过的结论记着」是同一个路子。
+ */
+private object ChatMemo {
+    private val mem = HashMap<String, List<String>>()
+
+    fun sig(e: com.pagefold.reader.voice.ChatCfg): String =
+        (e.base ?: "").trim() + "|" + (e.key ?: "").trim()
+
+    fun get(k: String): List<String>? = mem[k]
+
+    fun put(k: String, v: List<String>) {
+        if (v.isNotEmpty()) mem[k] = v
+    }
+}
+
+/**
+ * 接口那一行。比嗓源少两件事：不用选音色，也没有协议 —— 都是 OpenAI 兼容口。
+ *
+ * 「拉清单」和「测一下」两个动作分开：
+ * 拉清单是把「这家有哪些模型」拿回来，测一下是「这个模型答不答得上话」。
+ * 合成后一次请求按字计费，所以不自动发，按一下才发。
+ */
+@Composable
+private fun ChatBlock(
+    e: com.pagefold.reader.voice.ChatCfg,
+    app: App,
+    onToggle: (Boolean) -> Unit,
+    onEdit: (com.pagefold.reader.voice.ChatCfg) -> Unit,
+) {
+    val s = LocalSkin.current
+    var name by remember(e.id) { mutableStateOf(e.name) }
+    var base by remember(e.id) { mutableStateOf(e.base ?: "") }
+    var key by remember(e.id) { mutableStateOf(e.key ?: "") }
+    var model by remember(e.id) { mutableStateOf(e.model ?: "") }
+    /*
+     * 这家清单里有哪些模型。
+     *
+     * 初值从进程级那份取，不从空表起：定音是一个 LazyColumn，滚出去的那一段会被丢掉，
+     * 滚回来是**重新组合**，`remember` 一律从零开始 —— 于是每滑一次就重新要一遍清单、
+     * 重新等 0.8 秒，看着像「一滑动它就拉一次」。用户说的就是这个。
+     */
+    val sigKey = ChatMemo.sig(e)
+    var fetched by remember(e.id) { mutableStateOf(ChatMemo.get(sigKey).orEmpty()) }
+    var verdict by remember(e.id) { mutableStateOf<com.pagefold.reader.voice.Chat.Hit?>(null) }
+    var busy by remember(e.id) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    fun push(next: com.pagefold.reader.voice.ChatCfg = e.copy(
+        name = name.ifBlank { e.name },
+        base = base,
+        key = key,
+        model = model,
+    )) {
+        // 地址、钥匙、模型动过，上一次验收的结论就不算数了 —— 留着会骗人。
+        verdict = null
+        onEdit(next)
+    }
+
+    /** 清单里挑一个填进去。已经填过模型的一个字都不碰。 */
+    fun autoPick(got: List<String>) {
+        if (got.isEmpty() || (e.model ?: "").isNotBlank()) return
+        val pick = com.pagefold.reader.voice.Chats.pick(
+            com.pagefold.reader.voice.ChatPresets.of(e.base ?: ""), got
+        )
+        if (pick.isNotBlank()) {
+            model = pick
+            push(e.copy(name = name.ifBlank { e.name }, base = base, key = key, model = pick))
+        }
+    }
+
+    /*
+     * 只有「地址 / 钥匙 / 开关」变了才去要清单。
+     *
+     * 要过一次就记进 [ChatMemo]：同一把钥匙滚出屏幕再滚回来、退出定音再进来，
+     * 都是现成的，一个请求都不发 —— 跟声源那边「验过的结论落盘」是同一个路子。
+     */
+    LaunchedEffect(e.id, sigKey, e.on) {
+        if (!e.on) { fetched = emptyList(); return@LaunchedEffect }
+        val k = e.key ?: ""
+        if (k.isBlank() || Auth.why(k) != null) { fetched = emptyList(); return@LaunchedEffect }
+        ChatMemo.get(sigKey)?.let { hit ->
+            fetched = hit
+            autoPick(hit)
+            return@LaunchedEffect
+        }
+        /*
+         * 手指停下 0.8 秒才去要。
+         *
+         * 每敲一个字都重来一次的话，粘一把钥匙就是一串请求 —— 有的家按次计费，
+         * 而且中途那几个残缺的钥匙会连着回 401，界面上看着像「这把钥匙不对」。
+         */
+        kotlinx.coroutines.delay(800)
+        busy = true
+        val got = com.pagefold.reader.voice.Chat.models(e)
+        fetched = got
+        ChatMemo.put(sigKey, got)
+        autoPick(got)
+        busy = false
+    }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 11.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            EngineMark(e.name, e.on)
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    e.name, fontSize = 14.sp,
+                    color = if (e.on) s.ink else s.inkDim,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                val v = verdict
+                Text(
+                    v?.said ?: when {
+                        !e.on -> "关"
+                        busy -> "…"
+                        (e.key ?: "").isBlank() -> "还差一把钥匙"
+                        (e.model ?: "").isBlank() -> "没挑模型"
+                        else -> (e.model ?: "").take(30)
+                    },
+                    fontSize = 10.sp,
+                    color = if (v == null) s.inkFaint else if (v.ok) s.flame else s.bad,
+                    maxLines = if (v == null) 1 else 2,
+                )
+            }
+            if (e.on && (e.key ?: "").isNotBlank()) {
+                Text(
+                    if (busy) "…" else "测",
+                    fontSize = 11.sp,
+                    color = if (busy) s.inkFaint else s.inkDim,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(7.dp))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) {
+                            if (busy) return@clickable
+                            busy = true
+                            verdict = null
+                            scope.launch {
+                                verdict = com.pagefold.reader.voice.Chat.hello(e.copy(model = model))
+                                busy = false
+                            }
+                        }
+                        .padding(horizontal = 9.dp, vertical = 5.dp)
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            Pill(e.on, onToggle)
+        }
+
+        if (!e.on) return@Column
+        Spacer(Modifier.height(4.dp))
+
+        InlineField("接口地址", base, { base = it; push() }, "https://…")
+        InlineField("钥匙", key, { key = it; push() }, "sk-…", secret = true, sanitize = Auth::clean)
+        InlineField("模型", model, { model = it; push() }, "填完钥匙自动挑")
+        if (fetched.isNotEmpty()) {
+            Chips(fetched.take(40), model) { model = it; push() }
+        }
+    }
+}
+
+/**
  * 一排可选的字。点一下就换成那个。
  *
  * @param multi  true = 多选（音色那一栏用），点一下加、再点一下去掉
@@ -1499,6 +1746,113 @@ internal fun NavLine(title: String, sub: String, onClick: () -> Unit) {
             }
         }
         Text("›", fontSize = 16.sp, color = s.inkFaint)
+    }
+}
+
+/**
+ * 准它用哪几副嗓子。
+ *
+ * 「一副不给」必须存得下来 —— 空白既表示「全给」，把最后一副点掉就会自己全亮回来。
+ * 记号在 [com.pagefold.reader.field.AI_NO_VOICE]。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
+    val skin = LocalSkin.current
+    val all = remember(s.enginesJson, app.box.custom().size) {
+        runCatching { Catalog.ours(s.engines, app.box.custom()).map { it.name }.distinct() }
+            .getOrDefault(emptyList())
+    }
+    val picked = s.aiVoiceSet ?: all.toSet()
+
+    Column(Modifier.padding(vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("准它用的嗓子", fontSize = 15.sp, color = skin.ink, modifier = Modifier.weight(1f))
+            Text("${picked.size} / ${all.size}", fontSize = 11.sp, color = skin.inkFaint)
+        }
+        if (all.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("音色库里一副都没有。先去「声源」里开一路。", fontSize = 11.sp, color = skin.inkFaint)
+        } else {
+            Chips(all, "", multi = true, picked = picked.toList()) { n ->
+                val next = if (n in picked) picked - n else picked + n
+                app.field.edit {
+                    it.copy(
+                        aiVoices = when {
+                            next.isEmpty() -> com.pagefold.reader.field.AI_NO_VOICE
+                            next.size == all.size -> ""
+                            else -> all.filter { x -> x in next }.joinToString(",")
+                        }
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Btn("全给", { app.field.edit { it.copy(aiVoices = "") } }, BtnKind.GHOST)
+                Btn(
+                    "一副不给",
+                    { app.field.edit { it.copy(aiVoices = com.pagefold.reader.field.AI_NO_VOICE) } },
+                    BtnKind.GHOST,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 发给它的那段话。
+ *
+ * 名单和返回格式不在这儿 —— 那两段是接口约定，改了整份结果就解析不出来。
+ * 这儿只放「怎么分」的口径：先挑现成的、主角要各有各的、配角可以合。
+ */
+@Composable
+private fun AiAskField(s: Settings, app: App, say: (String) -> Unit) {
+    val skin = LocalSkin.current
+    /*
+     * 初值只取一次。
+     *
+     * 写成 `remember(s.aiPrompt)` 的话，每敲一个字都改一次设置 → key 变 → 状态重建，
+     * 中文输入法正在拼的那一截会被打断（「打字打一半字没了」）。
+     * 这一格是唯一的数据源，别处要改它就重进这一页。
+     */
+    var text by remember { mutableStateOf(s.aiPrompt) }
+
+    Column(Modifier.padding(vertical = 6.dp)) {
+        Text("发给它的话", fontSize = 15.sp, color = skin.ink)
+        Spacer(Modifier.height(8.dp))
+        /*
+         * 一段真能改的字。
+         *
+         * 上一版把出厂那段压在输入框上面当占位：两段字叠在一起，既看不清也点不准，
+         * 用户说的「用户也修改不了」就是它。占位只在空的时候写一行小字，落在最上面；
+         * 真开始写，那行就没了。
+         *
+         * 「看全文」「恢复出厂」拿掉：框里本来就是全文，也没有第二个版本可以「恢复」——
+         * 清空这一格就是回到出厂那段。
+         */
+        Box(
+            Modifier.fillMaxWidth().heightIn(min = 190.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(skin.panelSink)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            BasicTextField(
+                value = text,
+                onValueChange = { t ->
+                    text = t.take(1600)
+                    app.field.edit { it.copy(aiPrompt = text) }
+                },
+                textStyle = TextStyle(fontSize = 12.sp, color = skin.ink, lineHeight = 19.sp),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(skin.flame),
+                modifier = Modifier.fillMaxWidth().fillMaxSize(),
+            )
+            if (text.isBlank()) {
+                Text(
+                    Assign.ASK, fontSize = 12.sp, color = skin.inkFaint, lineHeight = 19.sp,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 

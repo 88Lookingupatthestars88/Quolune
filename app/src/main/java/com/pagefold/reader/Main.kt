@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import com.pagefold.reader.book.BookMeta
 import com.pagefold.reader.field.Settings
 import com.pagefold.reader.kit.Dock
+import com.pagefold.reader.voice.AiJob
 import com.pagefold.reader.kit.BgLayer
 import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.ThemeId
@@ -154,6 +155,42 @@ private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
                     }
                 }
                 Dock(tab, onPick = { tab = it })
+            }
+        }
+
+        /*
+         * 顶上那一条：「AI 已排好」。
+         *
+         * 排这件事在 AiJob 里跑，人可能在别的页翻书、在音色页调调门。
+         * 排完了不把人拽回去，只在这儿放一条 —— 他自己决定什么时候看。
+         * 点它就是回那本书、把派角纸摊开、落在结果那一屏。
+         */
+        if (AiJob.fresh && !AiJob.open) {
+            val sk = LocalSkin.current
+            Row(
+                Modifier.align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, top = 10.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(sk.panelLift)
+                    .border(1.dp, sk.flame.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .clickable {
+                        AiJob.wantCast = true
+                        val bm = app.shelf.find(AiJob.bookId)
+                        if (bm != null) book = bm else tab = 3
+                    }
+                    .padding(horizontal = 14.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    AiJob.brief.ifBlank { "AI 已经排好" },
+                    fontSize = 12.sp,
+                    color = sk.ink,
+                    maxLines = 2,
+                    modifier = Modifier.weight(1f),
+                )
+                Text("看看", fontSize = 12.sp, color = sk.flame, fontWeight = FontWeight.Medium)
             }
         }
 
