@@ -107,10 +107,12 @@ import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -334,6 +336,8 @@ private class Laid(
     private val segTo: Int = a.pEndOf(ch),
     /** 块首要不要补一行章名。空 = 不补（整章那个已经在段里带上标题了）。 */
     private val title0: String = "",
+    /** 「段间距」那一格：两段之间**多**空出来的高度，0 = 贴住。见 [gapSp]。 */
+    private val paraGap: Int = 0,
 ) {
     private val sb = StringBuilder(1 shl 15)
     private val ss = ArrayList<Int>(512)
@@ -343,6 +347,32 @@ private class Laid(
     private val ta = ArrayList<Int>(32)
     private val gt = ArrayList<Int>(512)
     private val gn = ArrayList<Int>(512)
+
+    /**
+     * 段间那条空行在这串字里的位置（[GAP] 那个字符的下标）。
+     *
+     * 切页时按页把落在这一页里的几条挂上 `ParagraphStyle` —— 行高写在那一段上，
+     * 段间距才不会跟着整页的行距一起变。
+     */
+    private val gaps = ArrayList<Int>(64)
+
+    /**
+     * 段与段之间**多**空出来的高度（sp）。0 = 一个都不多给，跟没有这一格时一样。
+     *
+     * 用 sp 不用 dp：它跟字号、行距是一路的东西，系统字号调大，段间距跟着放大。
+     */
+    val gapSp: Float = paraGap.coerceIn(0, 40).toFloat()
+
+    /**
+     * 那条空行里每一行的高度 —— 是 [gapSp] 的一半。
+     *
+     * 一段文字末尾带一个换行，排版器会把它算成**两行**：一行是那个零宽字符，
+     * 一行是换行后面那个空的。两行同属这一段，所以都吃同一个行高。
+     * 直接写 gapSp 的话，最后落在屏幕上就是 2 × gapSp —— 用户量到的
+     * 「拖到最小仍隔着一整行」「10 号看着像两行」就是这个二倍。
+     * 减半，两行加起来正好一个 gapSp。
+     */
+    private val gapLineSp: Float get() = gapSp / 2f
     /** 每个签是不是「未识别出」。跟 tf/tt/ta 一一对应。 */
     private val tu = ArrayList<Boolean>(512)
 
@@ -405,7 +435,23 @@ private class Laid(
 
     private fun step() {
         if (k >= stop) { built = true; return }
-        if (sb.length > headLen) sb.append('\n')
+        if (sb.length > headLen) {
+            /*
+             * 段间那条空行：一个换行收掉上一段，再单起一段只放一个零宽字符。
+             *
+             * 以前这里只写一个 '\n' —— 那是「换行」，不是「空一行」：两段之间的距离
+             * 就等于行距，段间距那一格调多少都一样。
+             * 现在多出来的高度由这条空行自己那一行担着（见 [slice]）。
+             *
+             * gapSp 是 0 的时候**一个字都不插**：版面跟没有这一格的时候逐字节一样。
+             */
+            sb.append('\n')
+            if (gapSp > 0f) {
+                gaps.add(sb.length)
+                sb.append(GAP)
+                sb.append('\n')
+            }
+        }
         val p0 = a.pFrom[k]
         val p1 = a.pTo[k]
         sb.append(INDENT)
@@ -457,6 +503,18 @@ private class Laid(
         return if (r < tt[i]) ta[i] else null
     }
 
+    /**
+     * 从 [r0] 往后跳过段间的换行与空行，落在下一个真正的字上。
+     *
+     * 切页时页首不能从一条空行开始：上一页已经把段收掉了，这一页再吃一条空行，
+     * 页顶就凭空空出半截，而且每翻一页都多一次。
+     */
+    fun skipGaps(r0: Int): Int {
+        var r = r0.coerceIn(0, sb.length)
+        while (r < sb.length && (sb[r] == '\n' || sb[r] == GAP)) r++
+        return r
+    }
+
     /** 原文位置 → 排好的那串字里的位置。 */
     fun rendered(abs: Int): Int {
         if (sa.isEmpty()) return 0
@@ -503,6 +561,22 @@ private class Laid(
     }
 
     /**
+     * 第一个位置 ≥ [r] 的空行下标（[gaps] 是递增的，二分）。
+     *
+     * 不二分也能跑，代价是每次切页都从第一条空行数到这一页 —— 一章五十万字、
+     * 一万七千条空行的时候，切一页要几百次这种扫描，翻页就会一顿一顿的。
+     */
+    private fun gapFrom(r: Int): Int {
+        var lo = 0
+        var hi = gaps.size
+        while (lo < hi) {
+            val m = (lo + hi) / 2
+            if (gaps[m] < r) lo = m + 1 else hi = m
+        }
+        return lo
+    }
+
+    /**
      * 切出 [from, to) 这一段，连样式一起带上。
      *
      * 只重建这一段，不碰整章 —— 这正是「五十万字一章也不卡」的来由。
@@ -512,10 +586,56 @@ private class Laid(
         var s0 = from.coerceIn(0, sb.length)
         var s1 = to.coerceIn(s0, sb.length)
         while (s1 > s0 && sb[s1 - 1] == '\n') s1--
+        /*
+         * 尾巴上正好是一条段间空行时，整条掐掉。
+         *
+         * 只掐 '\n' 的话会剩下一个零宽字符，它自成一段、还带着段间距的行高 ——
+         * 页底就凭空多出半截空白，下一页又没有。
+         */
+        if (s1 - 2 >= s0 && sb[s1 - 1] == GAP && sb[s1 - 2] == '\n') s1 -= 2
         if (s1 <= s0) return AnnotatedString("")
         val sub = sb.substring(s0, s1)
         return buildAnnotatedString {
             append(sub)
+            /*
+             * 段间距写在这几条空行自己的段落样式上。
+             *
+             * 一份样式只管这一段：正文其他行的行距还是 bodyStyle 那个数。
+             * Trim.None 是必须的 —— 去掉它，安卓会把空行上下裁一刀，量出来 28、
+             * 画出来 20，切页按量出来的算，页尾就会漏半行。
+             */
+            val gs = ParagraphStyle(
+                lineHeight = gapLineSp.sp,
+                lineHeightStyle = LineHeightStyle(
+                    LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None,
+                ),
+            )
+            var gi = gapFrom(s0)
+            while (gi < gaps.size && gaps[gi] < s1) {
+                val g = gaps[gi] - s0
+                /*
+                 * 样式必须**连后面那个换行一起**盖住。
+                 *
+                 * 只盖那个零宽字符的话，它后面那个 '\n' 是另一段：那一段空着，
+                 * 用的是正文行距 —— 于是每一对段落之间固定多出一整行，
+                 * 滑块拖到哪儿都只是在这整行之上加减几个像素，看着就是「调了没用」。
+                 * 两段都盖上半高，加起来正好是这一格填的数。
+                 */
+                val e = (g + 2).coerceAtMost(s1 - s0)
+                if (e > g) {
+                    /*
+                     * 这个零宽字符自己必须**极小**。
+                     *
+                     * 一行的高度先由这一行里最高的那个字定：给它 19sp 的字号，
+                     * 这一行最少也有一个字高（约 22sp），段落样式里写多少都不管用。
+                     * 字号压到 1sp，这一行就只剩段落样式里那个行高说了算。
+                     */
+                    addStyle(SpanStyle(fontSize = 1.sp), g, e)
+                    addStyle(gs, g, e)
+                }
+                gi++
+            }
+
             /* 章名那一段放大加粗。范围夹在本段里，越界会让 addStyle 抛。 */
             val hEnd = (headLen - 2 - s0).coerceAtMost(s1 - s0)
             if (headLen > 2 && s0 < headLen - 2 && hEnd > 0) {
@@ -553,6 +673,15 @@ private class Laid(
 }
 
 private const val INDENT = "\u3000\u3000"
+
+/**
+ * 段与段之间那条空行里放的字符。
+ *
+ * 零宽，画不出来，只用来把这一行单独立成一段 —— 段间距就写在这一段自己的行高上。
+ * 为什么不靠行距：一行的高度由整段的 lineHeight 说了算，段间距要单独一格，
+ * 只能让它自成一段。
+ */
+private const val GAP = '\u200B'
 
 /**
  * 开着「标出谁在说话」、可这一句没认出人来时，挂的那个签。
@@ -665,8 +794,8 @@ private fun splitInto(
         loom.grow(from + 700)
         val total = loom.len
         if (from >= total) break
-        // 段与段之间那个换行上一页已经用掉了，页首不该再吃一行空的。
-        while (from < total && loom.slice(from, from + 1).text == "\n") from++
+        // 段与段之间那个换行、还有那条空行，上一页已经用掉了，页首不该再吃一遍。
+        from = loom.skipGaps(from)
         if (from >= total) break
 
         var span = 700
@@ -771,6 +900,8 @@ private class ChapterCache(
     private val w: Int,
     private val h: Int,
     private val measurer: TextMeasurer,
+    /** 「段间距」那一格。它变了，排好的页和页数全变，缓存得跟着换一份。 */
+    private val paraGap: Int,
 ) {
     private val lays = LinkedHashMap<Int, Laid>()
 
@@ -836,7 +967,7 @@ private class ChapterCache(
         lays[ch]?.let { return it }
         val m = marksOf?.invoke(ch)
         /* 整章那块：**只建壳，不排**。翻到哪页长到哪页，见 [Laid.grow]。 */
-        val v = Laid(a, ch, style, m, tagColor)
+        val v = Laid(a, ch, style, m, tagColor, paraGap = paraGap)
         if (lays.size > 12) {
             val first = lays.keys.firstOrNull()
             if (first != null && first != ch) lays.remove(first)
@@ -932,8 +1063,8 @@ private class ChapterCache(
     }
 }
 
-private fun sigOf(style: TextStyle, w: Int, h: Int): String =
-    "${style.fontSize.value}|${style.lineHeight.value}|$w|$h"
+private fun sigOf(style: TextStyle, w: Int, h: Int, paraGap: Int): String =
+    "${style.fontSize.value}|${style.lineHeight.value}|$w|$h|$paraGap"
 
 // ───────────────────────── 阅读页 ─────────────────────────
 
@@ -1602,13 +1733,13 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     val padBottomPx = 26.dp.roundToPx()
                     (constraints.maxHeight - padTopPx - padBottomPx).coerceAtLeast(1)
                 }
-                val sig = sigOf(bodyStyle, wpx, hpx)
+                val sig = sigOf(bodyStyle, wpx, hpx, effNow.paraGap)
                 val a = atlas
 
                 // 本章、上一章、下一章一起备好。翻过去是一瞬间的事，不是「正在加载」。
                 // 排版器只能在主线程用，所以这里不切线程，一帧一帧地量。
                 val cache = a?.let { at ->
-                    remember(at, sig) { ChapterCache(at, bodyStyle, wpx, hpx, measurer) }
+                    remember(at, sig) { ChapterCache(at, bodyStyle, wpx, hpx, measurer, effNow.paraGap) }
                 }
                 cache?.let { c ->
                     /*
@@ -2033,6 +2164,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                     hlFrom = hlFrom, hlTo = hlTo, selKey = selKey,
                                     tag = if (markOn) markMap[bc] else null,
                                     tagSig = if (markOn) markTick + 1 else 0,
+                                    paraGap = effNow.paraGap,
                                     onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis(); guardAt = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset },
                                     onTag = { abs -> whoAbs = abs },
                                     onTap = { if (canTap()) desk = !desk },
@@ -2586,8 +2718,10 @@ private fun BlockText(
      */
     tag: java.util.SortedMap<Int, String>? = null,
     tagSig: Int = 0,
+    /** 「段间距」那一格。整章分块画，块内和块间都得按同一格走。 */
+    paraGap: Int = 0,
 ) {
-    val laid = remember(a, bi, style, tag, tagSig) {
+    val laid = remember(a, bi, style, tag, tagSig, paraGap) {
         val f = a.bParaFrom.getOrElse(bi) { 0 }
         val t = a.bParaTo.getOrElse(bi) { f }
         val c = if (f < a.pCh.size) a.pCh[f] else 0
@@ -2596,13 +2730,22 @@ private fun BlockText(
          * 块是段区间，不是整章 —— 直接把这一块的段范围交给 Laid，
          * 别让它从章首排到章尾（一章五十万字，那一量就是几秒）。
          */
-        Laid(a, c, style, tag, Color.Unspecified, f, t, title).also { it.growAll() }
+        Laid(a, c, style, tag, Color.Unspecified, f, t, title, paraGap).also { it.growAll() }
     }
-    TextBlock(
-        laid = laid, from = 0, to = laid.len, style = style,
-        hlFrom = hlFrom, hlTo = hlTo, selKey = selKey,
-        onDown = onDown, onTap = onTap, canTap = canTap, onLaid = onLaid, onTag = onTag,
-    )
+    /*
+     * 块与块之间也是一条段界（一块正好收在段尾），底下补上同样的间距。
+     *
+     * 不补的话，块内的段落会按段间距分开，到块交界处忽然贴在一起 ——
+     * 一章七千块，这种「每五段紧一次」的接缝比完全不给段间距还显眼。
+     */
+    val gap = with(LocalDensity.current) { laid.gapSp.sp.toDp() }
+    Box(Modifier.padding(bottom = gap)) {
+        TextBlock(
+            laid = laid, from = 0, to = laid.len, style = style,
+            hlFrom = hlFrom, hlTo = hlTo, selKey = selKey,
+            onDown = onDown, onTap = onTap, canTap = canTap, onLaid = onLaid, onTag = onTag,
+        )
+    }
 }
 
 @Composable
@@ -3037,7 +3180,7 @@ private fun BookSetSheet(
                 TuneRow("fontSize", eff, ::tune)
                 TuneRow("lineGap", eff, ::tune)
                 TuneRow("padH", eff, ::tune)
-                TuneRow("paraGap", eff, ::tune)
+                TuneRow("paraGap2", eff, ::tune)
                 Row2("翻法", "左边左右翻，右边上下滚") {
                     TwoPick(
                         listOf("左右翻", "上下滚"),

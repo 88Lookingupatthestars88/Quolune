@@ -24,7 +24,7 @@ object Tune {
         Triple("fontSize", "字号", "字多大"),
         Triple("lineGap", "行距", "按字号的百分比"),
         Triple("padH", "左右留白", "留得多，一行字就少"),
-        Triple("paraGap", "段间距", "两段之间空多少"),
+        Triple("paraGap2", "段间距", "两段之间空多少"),
         Triple("turn", "翻法", "0 左右翻，1 上下滚"),
         // ── 读法 ──
         Triple("context", "前情", "合成时连前几句一起发，接住上一句的口气；只是多花几个字，不念出来"),
@@ -44,7 +44,7 @@ object Tune {
         "fontSize" -> intArrayOf(13, 32, 1)
         "lineGap" -> intArrayOf(110, 220, 5)
         "padH" -> intArrayOf(8, 48, 2)
-        "paraGap" -> intArrayOf(2, 30, 2)
+        "paraGap2" -> intArrayOf(0, 40, 2)
         "turn" -> intArrayOf(0, 1, 1)
         "context", "next" -> intArrayOf(0, 20, 1)
         "prefetch" -> intArrayOf(1, 12, 1)
@@ -60,7 +60,8 @@ object Tune {
     fun unitOf(key: String): String = when (key) {
         "fontSize" -> "号"
         "lineGap" -> "%"
-        "padH", "paraGap" -> "dp"
+        "padH" -> "dp"
+        "paraGap2" -> "sp"
         "turn" -> ""
         "context", "next" -> "句"
         "prefetch" -> "段"
@@ -76,7 +77,7 @@ object Tune {
         "fontSize" -> s.fontSize
         "lineGap" -> s.lineGap
         "padH" -> s.padH
-        "paraGap" -> s.paraGap
+        "paraGap2" -> s.paraGap
         "turn" -> if (s.turn == TurnMode.FLIP) 0 else 1
         "context" -> s.context
         "next" -> s.next
@@ -109,7 +110,7 @@ object Tune {
         if (m.containsKey("fontSize")) out = out.copy(fontSize = m.getValue("fontSize").coerceIn(13, 32))
         if (m.containsKey("lineGap")) out = out.copy(lineGap = m.getValue("lineGap").coerceIn(110, 220))
         if (m.containsKey("padH")) out = out.copy(padH = m.getValue("padH").coerceIn(8, 48))
-        if (m.containsKey("paraGap")) out = out.copy(paraGap = m.getValue("paraGap").coerceIn(2, 30))
+        if (m.containsKey("paraGap2")) out = out.copy(paraGap = m.getValue("paraGap2").coerceIn(0, 40))
         if (m.containsKey("turn")) out = out.copy(turnMode = if (m.getValue("turn") == 0) "FLIP" else "SCROLL")
         if (m.containsKey("context")) out = out.copy(context = m.getValue("context"))
         if (m.containsKey("next")) out = out.copy(next = m.getValue("next"))
@@ -161,7 +162,7 @@ object Tune {
         m["fontSize"] = s.fontSize
         m["lineGap"] = s.lineGap
         m["padH"] = s.padH
-        m["paraGap"] = s.paraGap
+        m["paraGap2"] = s.paraGap
         m["turn"] = if (s.turn == TurnMode.FLIP) 0 else 1
         return encode(m)
     }

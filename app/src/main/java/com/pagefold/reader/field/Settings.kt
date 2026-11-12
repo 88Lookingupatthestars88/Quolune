@@ -60,7 +60,7 @@ data class Settings(
     val lineGap: Int = 150,             // 行距百分比
     val turnMode: String = "FLIP",
     val padH: Int = 22,
-    val paraGap: Int = 10,
+    val paraGap: Int = 0,
 
     // 引擎
     val engine: String = "MIMO",

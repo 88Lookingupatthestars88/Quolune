@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -69,6 +70,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -462,16 +465,16 @@ private fun TuneScreen(
                                 hint = "左右留多少白。留得多，一行字就少。"
                             )
                             Ruler(
-                                "段间距", s.paraGap.toFloat(), 2f, 30f, 2f,
+                                "段间距", s.paraGap.toFloat(), 0f, 40f, 2f,
                                 { app.field.edit { c -> c.copy(paraGap = it.roundToInt()) } },
-                                unit = "dp", low = "2", high = "30",
-                                hint = "两段之间再空一点。"
+                                unit = "sp", low = "0", high = "40",
+                                hint = "两段之间再空一点。0 就是贴住，只换一行。"
                             )
                             Spacer(Modifier.height(6.dp))
                             Btn(
                                 "照默认这套",
                                 {
-                                    app.field.edit { it.copy(fontSize = 19, lineGap = 150, padH = 22, paraGap = 10) }
+                                    app.field.edit { it.copy(fontSize = 19, lineGap = 150, padH = 22, paraGap = 0) }
                                     msg = "眼下 19 号字，1.5 倍行距，左右留 22。"
                                 },
                                 BtnKind.GHOST,
@@ -903,8 +906,20 @@ private fun BgSheet(
     onTheme: () -> Unit,
 ) {
     val spec = BgSpec.decode(current)
+    /*
+     * 预览格的高度跟着屏幕走。
+     *
+     * 写死 190 的时候，屏幕矮一档（或者系统字体调大）这张纸的固定高度就超过了
+     * 能用的那截，红按钮被裁在屏幕外，往下又滑不动。
+     */
+    val previewH = (LocalConfiguration.current.screenHeightDp * 0.26f).coerceIn(110f, 190f).dp
     Overlay(onClose) {
-        Column(Modifier.padding(20.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp)
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "${Pages.name(page)}的底子",
@@ -916,7 +931,7 @@ private fun BgSheet(
             }
             Spacer(Modifier.height(14.dp))
             Box(
-                Modifier.fillMaxWidth().height(190.dp)
+                Modifier.fillMaxWidth().height(previewH)
                     .clip(RoundedCornerShape(14.dp))
                     .background(skin.ground)
                     .border(1.dp, skin.hairSoft, RoundedCornerShape(14.dp))
@@ -1060,6 +1075,12 @@ private fun Sample(s: Settings) {
         "他说这话时没抬头，手里的炭笔也没停。",
         "桌上摊着半张舆图，朱线断在雁门关外。",
     )
+    /*
+     * 样张里的段间距必须跟正文那套算法一字不差：正文那条空行的高度**就是**
+     * paraGap（sp），0 就贴住。差着算，样张就成了骗人的。
+     */
+    val gap = s.paraGap.coerceIn(0, 40)
+    val gapDp = with(LocalDensity.current) { gap.sp.toDp() }
     Box(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(skin.rChip))
@@ -1069,7 +1090,7 @@ private fun Sample(s: Settings) {
     ) {
         Column {
             paras.forEachIndexed { i, p ->
-                if (i > 0) Spacer(Modifier.height(s.paraGap.dp))
+                if (i > 0 && gap > 0) Spacer(Modifier.height(gapDp))
                 Text("　　$p", style = body)
             }
         }
@@ -1373,14 +1394,47 @@ private fun VoiceBlock(
  */
 private object ChatMemo {
     private val mem = HashMap<String, List<String>>()
+    private var file: java.io.File? = null
+    private var loaded = false
+
+    /**
+     * 落一份在 files/chat-models.json —— 跟声源那份 models.json 是同一个路子。
+     *
+     * 不落盘的话，进程一重启就全忘：再进定音又去要一遍，用户看到的就是
+     * 「每次进来都重新拉」。空了也要记（空表就是「问过了，这家没给」），
+     * 不然那家连着失败，每进一次页面就撞一次墙。
+     */
+    fun attach(app: android.content.Context) {
+        if (file == null) file = java.io.File(app.filesDir, "chat-models.json")
+        if (loaded) return
+        loaded = true
+        runCatching {
+            val f = file ?: return@runCatching
+            if (!f.exists()) return@runCatching
+            val t = object : com.google.gson.reflect.TypeToken<HashMap<String, List<String>>>() {}.type
+            com.google.gson.Gson().fromJson<HashMap<String, List<String>>>(f.readText(), t)
+                ?.let { mem.putAll(it) }
+        }
+    }
+
+    private fun save() {
+        runCatching {
+            val f = file ?: return@runCatching
+            f.writeText(com.google.gson.Gson().toJson(mem))
+        }
+    }
 
     fun sig(e: com.pagefold.reader.voice.ChatCfg): String =
         (e.base ?: "").trim() + "|" + (e.key ?: "").trim()
 
     fun get(k: String): List<String>? = mem[k]
 
+    /** 这一对「地址 + 钥匙」问过没有。问过就不再自己去问第二遍。 */
+    fun knows(k: String): Boolean = mem.containsKey(k)
+
     fun put(k: String, v: List<String>) {
-        if (v.isNotEmpty()) mem[k] = v
+        mem[k] = v
+        save()
     }
 }
 
@@ -1404,16 +1458,19 @@ private fun ChatBlock(
     var key by remember(e.id) { mutableStateOf(e.key ?: "") }
     var model by remember(e.id) { mutableStateOf(e.model ?: "") }
     /*
-     * 这家清单里有哪些模型。
+     * 这一格是「地址 + 钥匙」问来的清单。
      *
-     * 初值从进程级那份取，不从空表起：定音是一个 LazyColumn，滚出去的那一段会被丢掉，
-     * 滚回来是**重新组合**，`remember` 一律从零开始 —— 于是每滑一次就重新要一遍清单、
-     * 重新等 0.8 秒，看着像「一滑动它就拉一次」。用户说的就是这个。
+     * 进来先摆盘上那份（`chat-models.json`），一个请求都不发 —— 跟声源那边一样。
+     * 只有**从来没问过**这一对，才自己去要一次；要过之后就一直摆着，包括问空了。
+     * 想重问按「刷新清单」，那颗按钮一直都在。
      */
+    ChatMemo.attach(app)
     val sigKey = ChatMemo.sig(e)
     var fetched by remember(e.id) { mutableStateOf(ChatMemo.get(sigKey).orEmpty()) }
     var verdict by remember(e.id) { mutableStateOf<com.pagefold.reader.voice.Chat.Hit?>(null) }
     var busy by remember(e.id) { mutableStateOf(false) }
+    /** 正在拉清单。跟「测」分开：测的是这个模型答不答得上话。 */
+    var pulling by remember(e.id) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun push(next: com.pagefold.reader.voice.ChatCfg = e.copy(
@@ -1440,20 +1497,18 @@ private fun ChatBlock(
     }
 
     /*
-     * 只有「地址 / 钥匙 / 开关」变了才去要清单。
+     * 进来只做一件事：把盘上那份摆出来。
      *
-     * 要过一次就记进 [ChatMemo]：同一把钥匙滚出屏幕再滚回来、退出定音再进来，
-     * 都是现成的，一个请求都不发 —— 跟声源那边「验过的结论落盘」是同一个路子。
+     * 只有「这一对地址 + 钥匙从来没问过」才真去要一次 —— 要回来就落盘，之后
+     * 无论进来多少次、滚出去滚回来，都不再发请求。跟声源那边一模一样。
+     * 想重新问，按模型底下那颗「刷新清单」。
      */
-    LaunchedEffect(e.id, sigKey, e.on) {
-        if (!e.on) { fetched = emptyList(); return@LaunchedEffect }
-        val k = e.key ?: ""
-        if (k.isBlank() || Auth.why(k) != null) { fetched = emptyList(); return@LaunchedEffect }
-        ChatMemo.get(sigKey)?.let { hit ->
-            fetched = hit
-            autoPick(hit)
-            return@LaunchedEffect
-        }
+    LaunchedEffect(sigKey, e.on) {
+        fetched = ChatMemo.get(sigKey).orEmpty()
+        if (!e.on) return@LaunchedEffect
+        val k = key.trim()
+        if (k.isBlank() || Auth.why(k) != null) return@LaunchedEffect
+        if (ChatMemo.knows(sigKey)) { autoPick(fetched); return@LaunchedEffect }
         /*
          * 手指停下 0.8 秒才去要。
          *
@@ -1461,12 +1516,30 @@ private fun ChatBlock(
          * 而且中途那几个残缺的钥匙会连着回 401，界面上看着像「这把钥匙不对」。
          */
         kotlinx.coroutines.delay(800)
-        busy = true
-        val got = com.pagefold.reader.voice.Chat.models(e)
-        fetched = got
+        pulling = true
+        val got = com.pagefold.reader.voice.Chat.models(
+            e.copy(base = base, key = k, model = model)
+        )
         ChatMemo.put(sigKey, got)
+        fetched = got
         autoPick(got)
-        busy = false
+        pulling = false
+    }
+
+    /** 按一下才重问。问过的都落盘，下一次进来直接摆。 */
+    fun repull() {
+        val k = key.trim()
+        if (pulling || k.isBlank() || Auth.why(k) != null) return
+        scope.launch {
+            pulling = true
+            val got = com.pagefold.reader.voice.Chat.models(
+                e.copy(base = base, key = k, model = model)
+            )
+            ChatMemo.put(sigKey, got)
+            fetched = got
+            autoPick(got)
+            pulling = false
+        }
     }
 
     Column(Modifier.fillMaxWidth().padding(vertical = 11.dp)) {
@@ -1528,6 +1601,43 @@ private fun ChatBlock(
         InlineField("模型", model, { model = it; push() }, "填完钥匙自动挑")
         if (fetched.isNotEmpty()) {
             Chips(fetched.take(40), model) { model = it; push() }
+        }
+        /*
+         * 「刷新清单」一直都在。
+         *
+         * 清单是问过就摆着、不再自己重问的（跟声源一样）。那家的模型换了、或者
+         * 上一次恰好没连上，总得有个地方能按一下 —— 不然又回到「只能杀进程」。
+         */
+        if (key.isNotBlank() && Auth.why(key) == null) {
+            Row(
+                Modifier.padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    when {
+                        pulling -> "正在取清单"
+                        fetched.isEmpty() -> "取一份清单"
+                        else -> "刷新清单"
+                    },
+                    fontSize = 11.sp,
+                    color = if (pulling) s.inkFaint else s.inkDim,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, s.hairSoft, RoundedCornerShape(8.dp))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) { repull() }
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+                if (fetched.isEmpty() && !pulling) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "没取到就自己填，一样能用",
+                        fontSize = 10.sp, color = s.inkFaint,
+                    )
+                }
+            }
         }
     }
 }
@@ -1921,7 +2031,17 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
                         translationY = (1f - rise.value) * 44.dp.toPx()
                         alpha = rise.value
                     }
-                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                    .windowInsetsPadding(
+                        /*
+                         * 三样都要让：键盘、导航条、状态栏。
+                         *
+                         * 少了状态栏那一档，纸一旦长到顶就钻到状态栏底下 ——
+                         * 标题被时间盖住，往上滑也看不见（内容超了没有滚动条）。
+                         */
+                        WindowInsets.ime
+                            .union(WindowInsets.navigationBars)
+                            .union(WindowInsets.statusBars)
+                    )
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(s.surface)
                     .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
