@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -2013,6 +2014,11 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
         rise.animateTo(1f, tween(durationMillis = 220, easing = FastOutSlowInEasing))
     }
 
+    val geom = sheetGeom()
+    val lift = geom[0]
+    val d = LocalDensity.current
+    val imePx = WindowInsets.ime.getBottom(d)
+
     androidx.compose.ui.window.Dialog(
         onDismissRequest = shut,
         properties = androidx.compose.ui.window.DialogProperties(
@@ -2028,19 +2034,26 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .graphicsLayer {
-                        translationY = (1f - rise.value) * 44.dp.toPx()
+                        // 窗口越出去多少就抬回来多少。lift 为 0 的机器上，这一项是零。
+                        translationY = (1f - rise.value) * 44.dp.toPx() - lift
                         alpha = rise.value
                     }
-                    .windowInsetsPadding(
+                    .then(
                         /*
-                         * 三样都要让：键盘、导航条、状态栏。
+                         * 窗口给得对的机器（lift = 0）：照旧让 Compose 的 insets 说话 ——
+                         * 键盘、导航条、状态栏三样都让。
                          *
-                         * 少了状态栏那一档，纸一旦长到顶就钻到状态栏底下 ——
-                         * 标题被时间盖住，往上滑也看不见（内容超了没有滚动条）。
+                         * 窗口越界的机器（lift > 0）：那一套在这台机器上量出来全是 0，
+                         * 让了等于没让，改用 sheetGeom 量到的实数。
                          */
-                        WindowInsets.ime
-                            .union(WindowInsets.navigationBars)
-                            .union(WindowInsets.statusBars)
+                        if (lift == 0) Modifier.windowInsetsPadding(
+                            WindowInsets.ime
+                                .union(WindowInsets.navigationBars)
+                                .union(WindowInsets.statusBars)
+                        ) else Modifier.padding(
+                            top = with(d) { geom[1].toDp() },
+                            bottom = with(d) { maxOf(geom[2], imePx).toDp() },
+                        )
                     )
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(s.surface)
@@ -2048,6 +2061,95 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
             ) { content() }
         }
     }
+}
+
+/**
+ * 这张弹层纸在屏幕里到底有多少地方可以站。
+ *
+ * 同一份 `DialogProperties`，各家系统摆得不一样。小米 8 SE（Android 10）上，窗口就是
+ * 「状态栏下面一横，到导航条上面一横」，纸贴在窗口底，正好落在底下那排字的上方；
+ * K90 Pro Max（Android 17）上，窗口顶也从状态栏下面起算，高度却仍旧按整屏给 ——
+ * 窗口底于是比屏幕底低一整个状态栏，纸跟着掉出去一截，底下那颗红按钮只剩一条边。
+ *
+ * 所以不猜。量一次窗口在屏幕上的实际矩形，超出去多少记下来；系统栏的真实厚度也一并量，
+ * 弹层里读不到就退回资源里的标准值。
+ *
+ * 这整块包在 runCatching 里：它跑在 layout 回调上，抛一次就是整页崩。
+ * 量不出来就用 0，弹层退回原来那条路，最坏是位置不对，不会挂。
+ *
+ * @return [越过屏幕底的像素, 顶部系统栏, 底部系统栏]
+ */
+@Composable
+private fun sheetGeom(): IntArray {
+    val view = androidx.compose.ui.platform.LocalView.current
+    var geom by remember { mutableStateOf(intArrayOf(0, 0, 0)) }
+    DisposableEffect(view) {
+        val loc = IntArray(2)
+        val read = {
+            runCatching {
+                view.getLocationOnScreen(loc)
+                val over = loc[1] + view.height - view.resources.displayMetrics.heightPixels
+                val bars = insetBarsPx(view.rootWindowInsets, view.resources)
+                val next = intArrayOf(if (over > 0) over else 0, bars[0], bars[1])
+                if (!next.contentEquals(geom)) geom = next
+            }
+        }
+        val watch = android.view.View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> read() }
+        view.addOnLayoutChangeListener(watch)
+        view.post { read() }
+        onDispose { view.removeOnLayoutChangeListener(watch) }
+    }
+    return geom
+}
+
+/**
+ * 系统栏上下沿的厚度，单位像素。
+ *
+ * `WindowInsets.Type.systemBars()` 是 API 30 才有的；minSdk 是 26，
+ * 在 29 上直接调到就是个 `NoSuchMethodError`（Android 10 的机器一点就崩）。
+ * 老机器走 `systemWindowInsetTop/Bottom`，那两个字段 API 20 就在。
+ */
+@Suppress("DEPRECATION")
+private fun insetBarsPx(wi: android.view.WindowInsets?, res: android.content.res.Resources): IntArray {
+    var top = 0
+    var bottom = 0
+    if (wi != null) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val b = insetBarsPxR(wi)
+            top = b[0]; bottom = b[1]
+        } else {
+            top = wi.systemWindowInsetTop
+            bottom = wi.systemWindowInsetBottom
+        }
+    }
+    // 弹层窗口里这两项常常是 0（窗口自己不让），退回系统资源里写着的那两个值。
+    if (top <= 0) top = resBarPx(res, "status_bar_height")
+    if (bottom <= 0) bottom = resBarPx(res, "navigation_bar_height")
+    return intArrayOf(top, bottom)
+}
+
+/**
+ * API 30 起才有 `getInsets(Type)`。
+ *
+ * 这里走反射，不写死 `WindowInsets.Type.systemBars()` —— 那样类引用会留在字节码里，
+ * 老机器上无论有没有 SDK 守卫，只要有一种预解析的验证器碰上就炸（就是这么崩的）。
+ * 反射缺类时抛 ClassNotFoundException，被上面的 runCatching 吃掉，退回资源值。
+ */
+private fun insetBarsPxR(wi: android.view.WindowInsets): IntArray {
+    val api = android.os.Build.VERSION.SDK_INT
+    if (api < 30) return intArrayOf(0, 0)
+    val type = Class.forName("android.view.WindowInsets\$Type")
+    val bars = type.getMethod("systemBars").invoke(null) as Int
+    val got = wi.javaClass.getMethod("getInsets", Int::class.javaPrimitiveType).invoke(wi, bars)
+    val f = got.javaClass
+    val top = f.getField("top").getInt(got)
+    val bottom = f.getField("bottom").getInt(got)
+    return intArrayOf(top, bottom)
+}
+
+private fun resBarPx(res: android.content.res.Resources, name: String): Int {
+    val id = res.getIdentifier(name, "dimen", "android")
+    return if (id > 0) res.getDimensionPixelSize(id) else 0
 }
 
 /** 卡片里的小节标记。 */
