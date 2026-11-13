@@ -6,20 +6,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import java.io.ByteArrayOutputStream
 
-/**
- * 录一段话，直接录成 WAV。
- *
- * 为什么不用系统那个 MediaRecorder：它在 API 29 上默认出 m4a（AAC）。
- * 小米那条克隆口只收 mp3 和 wav，收到 m4a 直接拒 —— 录完上传失败，
- * 用户不知道是自己录错了还是应用坏了。本机又没有 ffmpeg，转不了。
- *
- * 所以走 AudioRecord 拿裸 PCM，自己补 44 字节 WAV 头。一步到位，
- * 出来就是对面认的格式，不经过任何转码。
- *
- * 采样率 44.1k / 单声道 / 16 位：这三样是 WAV 最常见的一副，
- * 对面拿去做克隆时不需要再猜。一分钟约 5.3 MB，
- * 一般人录二十秒就够，克隆的上限是 10 MB。
- */
+/** 录一段话，直接录成 WAV。 */
 object Rec {
 
     const val RATE = 44100
@@ -29,7 +16,6 @@ object Rec {
 
     /**
      * 开一条录音。
-     *
      * @return null = 这台机器现在录不了（没权限、麦克风被占）
      */
     @SuppressLint("MissingPermission")
@@ -52,12 +38,7 @@ object Rec {
     }.getOrNull()
 }
 
-/**
- * 一段正在进行的录音。
- *
- * 只在 IO 线程上用。读多少写多少，不驻留整段 PCM —— 一分钟五兆多，
- * 4GB 的机器上攒两三段一起就是一次假死。
- */
+/** 一段正在进行的录音。只在 IO 线程上用。 */
 class Take internal constructor(
     private val ar: AudioRecord,
     private val bufSize: Int,
@@ -91,11 +72,7 @@ class Take internal constructor(
         runCatching { ar.release() }
     }
 
-    /**
-     * 收尾：补上 WAV 头，把整段交出去。
-     *
-     * 头只有 44 字节，但少了它对面不认 —— 光有 PCM 的文件放出来是一串噪声。
-     */
+    /** 收尾：补上 WAV 头，把整段交出去。 */
     fun wav(): ByteArray {
         stop()
         val body = pcm.toByteArray()

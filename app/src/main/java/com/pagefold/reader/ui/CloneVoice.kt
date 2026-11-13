@@ -48,6 +48,7 @@ import com.pagefold.reader.field.Settings
 import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
 import com.pagefold.reader.kit.LocalSkin
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.voice.CloneApi
 import com.pagefold.reader.voice.Rec
 import com.pagefold.reader.voice.Voice
@@ -57,15 +58,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
-/**
- * 拿一段话，做一副嗓子。
- *
- * 两种来路摆在同一张纸上：当场录，或者挑一个现成的文件。
- * 录是一等入口 —— 想复刻自己的声音，谁都不会先去找个录音软件录好再回来。
- *
- * 各家做完给的东西不一样（见 [CloneApi]），所以字段跟着家的名字变：
- * 硅基多问一句「录音里说的是什么」，小米什么都不问。
- */
+/** 拿一段话，做一副嗓子。两种来路摆在同一张纸上：当场录，或者挑一个现成的文件。 */
 @Composable
 internal fun CloneVoice(
     s: Settings,
@@ -209,10 +202,7 @@ internal fun CloneVoice(
                                     if (on) skin.flame.copy(alpha = 0.45f) else skin.hairSoft,
                                     RoundedCornerShape(9.dp)
                                 )
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() }
-                                ) { pick = e.id }
+                                .tap { pick = e.id }
                                 .padding(horizontal = 12.dp, vertical = 7.dp)
                         )
                     }
@@ -303,14 +293,7 @@ internal fun CloneVoice(
                                     param = made.param,
                                     desc = note.trim(),
                                 )
-                                /*
-                                 * 做成之后立刻念一次。
-                                 *
-                                 * 不是为了试听 —— 是为了**激活**：MiniMax 那副
-                                 * 七天内不用会被删，这次合成就是那条「用了」。
-                                 * 顺带也验证它真能出声。失败不拦着保存，
-                                 * 嗓子已经在对面的账号里了。
-                                 */
+                                /* 做成之后立刻念一次。不是为了试听 —— 是为了激活：MiniMax 那副七天内不用会被删，这次合成就是那条「用了」。 */
                                 withContext(Dispatchers.IO) {
                                     runCatching {
                                         app.synth.make(
@@ -366,10 +349,7 @@ private fun Saying(
                     if (lit) s.flame.copy(alpha = 0.55f) else s.hairSoft,
                     CircleShape
                 )
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
+                .tap {
                     when {
                         recording -> onStop()
                         has -> onDrop()
@@ -412,10 +392,7 @@ private fun Saying(
                     fontSize = 11.sp, color = s.inkDim,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onFile() }
+                        .tap { onFile() }
                         .padding(vertical = 4.dp, horizontal = 1.dp)
                 )
             }
@@ -437,10 +414,7 @@ private fun Modal(onClose: () -> Unit, content: @Composable () -> Unit) {
         Box(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                 .background(s.scrim, RoundedCornerShape(24.dp))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onClose() },
+                .tap { onClose() },
             contentAlignment = Alignment.Center
         ) {
             Box(
@@ -448,10 +422,7 @@ private fun Modal(onClose: () -> Unit, content: @Composable () -> Unit) {
                     .heightIn(max = 640.dp)
                     .clip(RoundedCornerShape(22.dp))
                     .background(s.surface)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) {}
+                    .tap {}
             ) { content() }
         }
     }

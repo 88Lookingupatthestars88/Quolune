@@ -5,22 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 
-/**
- * 音色包的读与写。
- *
- * 为什么不用 Gson 直接映射：手里的包不止一种写法。
- * 咱自己做的大秦包长这样 ——
- *
- *   { "name": "...", "type": "design", "engineId": "mimo",
- *     "voiceParam": "...", "description": "...", "tags": "帝王,威严,沙哑" }
- *
- * tags 是逗号串，不是数组；id 全是 0；字段名也全是另一套。
- * Gson 撞上「要数组却给了字符串」直接抛异常，整包就废了 ——
- * 这就是「导入的 JSON 根本不行」的真因，不是文件坏了。
- *
- * 所以这里改成逐个字段去认：每种常见写法都收，缺的能推就推。
- * 名字在包里有、能听懂就行，格式不该成为门槛。
- */
+/** 音色包的读与写。为什么不用 Gson 直接映射：手里的包不止一种写法。 */
 object Pack {
 
     /** 读一包。返回 (音色, 一句话结果)；音色为空时那句话就是失败原因。 */
@@ -72,10 +57,7 @@ object Pack {
             pick(o, "engine", "engineId", "引擎", "provider")
                 ?: pick(o, "model", "modelId")
         )
-        /*
-         * 没写 type 的包按 preset 处理。当 design 的话，音色描述会进「第一条消息」，
-         * 容易被一起念出来。判法：名字或参数命中内置预设 → preset，否则才当 design。
-         */
+        /* 没写 type 的包按 preset 处理。 */
         val desc = pick(o, "desc", "description", "描述", "voiceDesc", "instruction").orEmpty()
         val param = pick(o, "param", "voiceParam", "voice", "参数", "voiceId")
             ?: desc.ifBlank { name }
@@ -170,12 +152,7 @@ object Pack {
 
     // ── 写 ───────────────────────────────────────────────────
 
-    /**
-     * 写一包。
-     *
-     * 内置的那几副也写进去 —— 换台手机、重装应用，不必再一个个找回来。
-     * 但要标清 builtin，导回来的时候会按名字合并，不会长出二十个重影。
-     */
+    /** 写一包。内置的那几副也写进去 —— 换台手机、重装应用，不必再一个个找回来。 */
     fun write(list: List<Voice>): String {
         val arr = JsonArray()
         list.forEach { v ->

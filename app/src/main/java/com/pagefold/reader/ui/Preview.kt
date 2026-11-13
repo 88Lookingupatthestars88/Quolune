@@ -49,6 +49,7 @@ import com.pagefold.reader.kit.Masthead
 import com.pagefold.reader.kit.Ornament
 import com.pagefold.reader.kit.SealMark
 import com.pagefold.reader.kit.Sz
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.voice.Audition
 import com.pagefold.reader.voice.Catalog
 import com.pagefold.reader.voice.Voice
@@ -57,12 +58,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * 试听。
- *
- * 只有单句：挑一副嗓子、写一句话、点试听。
- * 整段预演和生成音色搬去别处了 —— 那两件跟「听一句」不是一个事。
- */
+/** 试听。只有单句：挑一副嗓子、写一句话、点试听。 */
 @Composable
 fun PreviewScreen(
     s: Settings,
@@ -74,26 +70,12 @@ fun PreviewScreen(
 
     var custom by remember { mutableStateOf(app.box.custom()) }
 
-    /*
-     * 池子里是「现在开着的嗓源底下，所有真能念的嗓子」：
-     * 内置的 MiMo 八副；硅基流动、火山、MiniMax、百炼、OpenAI
-     * 这几家写在嗓源上的音色名；再加自己造的那几副。
-     * 关着的嗓源一副都不列 —— 列出来点了也念不响。
-     */
+    /* 池子里是「现在开着的嗓源底下。 */
     val pool = remember(custom, s.enginesJson) {
         Catalog.ours(s.engines, custom, emptyList())
     }
 
-    /*
-     * 一进这一页，手上就得先有一副嗓子。
-     *
-     * 以前是 pick 从空开始，靠 LaunchedEffect 在下一帧补上。那一帧里音色一排
-     * 一副都没选中、下面「这一副怎么念」那块不存在、试听按钮是灰的；下一帧三样
-     * 一起出现，音色那一排还要把选中的那副挪到最前 —— 整页重排一次，
-     * 看上去就是「进来闪了一下，像重新加载」。
-     *
-     * 现在在组合里就把它定下来，第一帧画出来已经是选好的样子。
-     */
+    /* 一进这一页，手上就得先有一副嗓子。 */
     val want = remember(pool, s.defaultVoice) {
         pool.firstOrNull { it.name == s.defaultVoice } ?: pool.firstOrNull()
     }
@@ -106,11 +88,7 @@ fun PreviewScreen(
     var err by remember { mutableStateOf<String?>(null) }
 
     /*
-     * 这一页也能改这副嗓子怎么念。
-     *
-     * 挑嗓子和调嗓子从来是一件事：听一句不对，第一反应是「快一点」「压低些」，
-     * 不是「换一副」。以前这里只能换人不能改，改要去音色页，改完还得回来再听。
-     * 情绪那一排已经就是调门，所以这块只摆其余几根。
+     * 这一页也能改这副嗓子怎么念，不用跳去音色页。
      */
     var rev by remember { mutableStateOf(0) }
     val probe = pick
@@ -209,10 +187,7 @@ fun PreviewScreen(
                                     if (on) skin.flame else skin.hairSoft,
                                     RoundedCornerShape(10.dp)
                                 )
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() }
-                                ) { pick = v }
+                                .tap { pick = v }
                                 .padding(horizontal = 13.dp, vertical = 9.dp)
                         ) {
                             Text(
@@ -273,10 +248,7 @@ fun PreviewScreen(
                                         if (on) Color.Transparent else skin.hairSoft,
                                         RoundedCornerShape(9.dp)
                                     )
-                                    .clickable(
-                                        indication = null,
-                                        interactionSource = remember { MutableInteractionSource() }
-                                    ) { style = st }
+                                    .tap { style = st }
                                     .padding(horizontal = 14.dp, vertical = 8.dp)
                             ) {
                                 Text(

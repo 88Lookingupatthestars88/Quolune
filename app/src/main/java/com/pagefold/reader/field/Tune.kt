@@ -3,15 +3,7 @@ package com.pagefold.reader.field
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
-/**
- * 一本书自己的读法。
- *
- * 定音里那一套是**全书默认**；这里只存「这本书跟默认不一样的那几格」。
- * 没动过的键根本不进这张表，所以外面改了，里面立刻跟着变 ——
- * 不会出现「两处各存一份，谁也不服谁」。
- *
- * 存成一个扁平的 {键: 数字}，读的时候摊回 Settings 上。
- */
+/** 一本书自己的读法。定音里那一套是全书默认；这里只存「这本书跟默认不一样的那几格」。 */
 object Tune {
 
     /** 键 → 说法 → 这一格管什么。界面照着这张表铺，加一项只要往这儿加一行。 */
@@ -127,10 +119,7 @@ object Tune {
 
     /**
      * 改一格：写进去，就这一件事。
-     *
-     * 不要顺手做「跟全局一样就删掉这一格」。每改一格都拿整张表跟全局比，
-     * 比的是哪一份全局说不清，结果是改 A 再改 B，A 被判成「跟全局一样」悄悄删了。
-     * 要跟回去，由人点「跟回去」，显式删。
+     * 不要顺手做「跟全局一样就删掉这一格」。
      */
     fun put(json: String, key: String, v: Int): String {
         val m = decode(json).toMutableMap()
@@ -147,13 +136,7 @@ object Tune {
 
     fun has(json: String, key: String): Boolean = decode(json).containsKey(key)
 
-    /**
-     * 把**此刻全局那套**抄成一张表。
-     *
-     * 收书那一刻调一次：这本书从此有一份自己的版式，定音之后再改，
-     * 不会回头把它拽走。旧书升级时也用它补一张，补的时候是什么就是什么，
-     * 之后不再跟随。
-     */
+    /** 把此刻全局那套抄成一张表。收书那一刻调一次：这本书从此有一份自己的版式，定音之后再改，不会回头把它拽走。 */
     fun snapshot(s: Settings): String = snapshot(s, "")
 
     /** 在已有那张表上盖版式五格，读法那几格原样留着。旧书迁移用这个。 */

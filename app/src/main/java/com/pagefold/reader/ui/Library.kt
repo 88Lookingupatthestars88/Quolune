@@ -80,6 +80,7 @@ import com.pagefold.reader.kit.T
 import com.pagefold.reader.kit.Masthead
 import com.pagefold.reader.kit.Ornament
 import com.pagefold.reader.kit.SealMark
+import com.pagefold.reader.kit.tap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -201,7 +202,7 @@ fun LibraryScreen(
 
         if (busy != null) {
             Box(Modifier.fillMaxSize().background(skin.scrim), contentAlignment = Alignment.Center) {
-                Panel(lift = true) { Busy(busy!!) }
+                Panel(lift = true) { Busy(busy ?: "") }
             }
         }
 
@@ -404,10 +405,7 @@ private fun ShelfRow(groups: List<String>, sel: String, total: Int, onPick: (Str
 private fun ShelfTab(text: String, on: Boolean, count: Int, onClick: () -> Unit) {
     val s = LocalSkin.current
     Column(
-        Modifier.clickable(
-            indication = null,
-            interactionSource = remember { MutableInteractionSource() }
-        ) { onClick() }
+        Modifier.tap { onClick() }
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -462,10 +460,7 @@ private fun BookTile(b: BookMeta, reading: Boolean, onOpen: () -> Unit, onHold: 
                     .size(26.dp)
                     .clip(CircleShape)
                     .background(s.ground.copy(alpha = 0.62f))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                    ) { onHold() },
+                    .tap { onHold() },
                 contentAlignment = Alignment.Center
             ) {
                 Text("⋯", fontSize = 13.sp, color = s.inkDim, lineHeight = 13.sp)
@@ -488,26 +483,14 @@ private fun BookTile(b: BookMeta, reading: Boolean, onOpen: () -> Unit, onHold: 
     }
 }
 
-/**
- * 封面。用户换过就用他那张；没换过就现画一块纸。
- *
- * 现画的好处是任何尺寸都清楚：书格是 150×210，接着听那条是 52×70，
- * 同一张位图缩到后者只剩一块色，字全糊了。字是排出来的，缩到多小都认得。
- *
- * 版式只做三件事：书名、作者、一圈极细的框。左上一点朱。
- * 不加纹理、不加渐变、不加阴影 —— 那些正是让封面看着像二十年前的东西。
- */
+/** 封面。用户换过就用他那张；没换过就现画一块纸。 */
 @Composable
 private fun Cover(b: BookMeta, modifier: Modifier) {
     val s = LocalSkin.current
 
     if (b.cover.isNotBlank()) {
-        val bmp = remember(b.cover) {
-            runCatching {
-                val opt = BitmapFactory.Options().apply { inSampleSize = 2 }
-                BitmapFactory.decodeFile(b.cover, opt)?.asImageBitmap()
-            }.getOrNull()
-        }
+        /* 后台解、按路径缓存。书房滚动时不再在主线程解图。 */
+        val bmp = com.pagefold.reader.kit.picture(b.cover)
         if (bmp != null) {
             Box(modifier.clip(RoundedCornerShape(3.dp)).background(s.panelSink)) {
                 androidx.compose.foundation.Image(
@@ -551,11 +534,7 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
             val head = if (cut > 2) raw.substring(0, cut).trim().trimEnd('，', ',', ' ', '\u3000') else raw
             val who = if (cut > 2) raw.substring(cut + 2).trimStart('：', ':', ' ', '\u3000') else ""
 
-            /*
-             * 「大秦：开局扶苏被贬，忽悠他造反」这种两段式书名：
-             * 冒号前那一截是系列名，排成一行小字当眉标；后面那截才是这本的书名。
-             * 小格放不下两层，整串一起排。
-             */
+            /* 「大秦：开局扶苏被贬，忽悠他造反」这种两段式书名：冒号前那一截是系列名，排成一行小字当眉标；后面那截才是这本的书名。 */
             val series = if (mini) null else seriesOf(head)
             val main = if (series != null) head.substring(series.length + 1) else head
 
@@ -565,12 +544,7 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
             val maxFs = if (mini) 13f else 22f
             val minFs = maxFs * 0.55f
 
-            /*
-             * 几行怎么定：
-             *   先试一行。这一行只要不算小（≥ 上限的七成），就用一行 ——
-             *   「极品万岁爷」排成「极品万岁 / 爷」比排成一整行难看十倍。
-             *   一行太小，才两行、三行往上加，加到字号够为止。
-             */
+            /* 几行怎么定：先试一行。这一行只要不算小（≥ 上限的七成），就用一行 ——「极品万岁爷」排成「极品万岁 / 爷」比排成一整行难看十倍。 */
             var fs = minOf(boxW / main.length.coerceAtLeast(1), maxFs)
             var lines: List<String> = listOf(main)
             if (fs < maxFs * 0.7f) {
@@ -657,18 +631,8 @@ private fun seriesOf(t: String): String? {
     return null
 }
 
-/**
- * 按宽度断行。优先在标点后断开，行首不留标点。
- *
- * [per] 是这一行最多放几个汉字。中文一个字就是一个字宽，所以按字数估足够准。
- */
-/**
- * 断行，但保证每一行都不超过 [per] 个字。
- *
- * 标点回退会让某一行多出一两个字（「开局扶苏被贬，」正好六个字一行），
- * 大格子里那样更好看；小格子只有 52dp 宽，多一个字就顶出框外，所以这里再兜一次：
- * 有行超了，就整首按字数硬切。
- */
+/** 按宽度断行。优先在标点后断开，行首不留标点。 */
+/** 断行，但保证每一行都不超过 [per] 个字。 */
 private fun fitTitle(t: String, per: Int): List<String> {
     val ls = wrapTitle(t, per)
     return if (ls.any { it.length > per }) hardWrap(t, per) else ls
@@ -735,7 +699,7 @@ private fun sheetSurface(content: @Composable () -> Unit) {
     Box(
         Modifier.fillMaxWidth()
             .background(s.surface, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+            .tap {}
             .padding(bottom = 16.dp)
     ) { content() }
 }
@@ -765,7 +729,7 @@ private fun SheetRow(text: String, danger: Boolean = false, onClick: () -> Unit)
     val s = LocalSkin.current
     Row(
         Modifier.fillMaxWidth()
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -778,7 +742,7 @@ private fun ShelfOption(text: String, on: Boolean, onClick: () -> Unit) {
     val s = LocalSkin.current
     Row(
         Modifier.fillMaxWidth()
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -803,15 +767,7 @@ private fun displayName(app: App, uri: Uri): String {
     return name
 }
 
-/**
- * 存一张封面。不转码，原样存，解码交给显示那一层带降采样。
- *
- * 文件名带时间戳，每换一次就是一个新路径。这是必要的：显示那一层按路径记结果
- * （`remember(b.cover)`），路径不变就当图没变，一直拿着先前解出来的那张，
- * 换第二张要退出应用才看得见。
- *
- * 旧图在存完之后删掉。
- */
+/** 存一张封面。不转码，原样存，解码交给显示那一层带降采样。 */
 private fun saveCover(app: App, id: String, uri: Uri): String? = runCatching {
     val dir = app.shelf.coverDir(app)
     val name = "$id-${System.currentTimeMillis().toString(36)}.img"

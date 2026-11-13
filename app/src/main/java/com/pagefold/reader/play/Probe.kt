@@ -4,19 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 
-/**
- * 系统「文字转语音」设置页要问引擎两件事。少一件，那一页就残一半。
- *
- * 1. CHECK_TTS_DATA —— 设置页启动时扫一遍「这台引擎有没有中文语音数据」。
- *    没回应，语言那一栏就选不动。
- *
- * 2. GET_SAMPLE_TEXT —— 点「播放」之前，设置页先来要一句样本文本。
- *    拿不到就是 ActivityNotFoundException，mSampleText 留空，
- *    于是「播放」键被 setEnabled(false) —— 正是那个灰键。
- *
- * 系统里装着的 TTS 引擎都要声明这两个，少一个，那一页就残一半。
- * 返回值是 framework 的老常量，都是 1，这里按名字写清楚。
- */
+/** 系统「文字转语音」设置页要问引擎两件事。 */
 
 private const val OK_TTS = 1
 

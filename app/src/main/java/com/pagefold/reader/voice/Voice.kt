@@ -5,12 +5,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.io.File
 
-/**
- * 一个可用的音色。
- * param 的含义随 kind 变化：
- *   PRESET / DESIGN / CLONE → MiMo 的 voice 字段（预设名或描述原文）
- *   SYSTEM                  → 系统 TTS 的 voice name
- */
+/** 一个可用的音色。param 的含义随 kind 变化。 */
 data class Voice(
     val id: String,
     val name: String,
@@ -39,21 +34,10 @@ class VoiceBox(ctx: Context) {
     private val f = File(ctx.filesDir, "voices.json")
     private val gson = Gson()
 
-    /**
-     * 内存里缓存的那一份。
-     *
-     * 播放时每一句都要重算音色池，每次都读文件、跑 Gson 就是每句两次磁盘读。
-     * 文件只有这个类在写，写完顺手更新缓存。
-     */
+    /** 内存里缓存的那一份。播放时每一句都要重算音色池，每次都读文件、跑 Gson 就是每句两次磁盘读。 */
     @Volatile private var mem: List<Voice>? = null
 
-    /**
-     * 用户自己那几副。
-     *
-     * 同样要兜 null：老 voices.json 里可能没有 desc / gender / age / tags / builtin，
-     * Gson 会给它们塞 null，之后 `v.tags.joinToString()` 就是 NPE ——
-     * 也就是「配好音色包之后莫名闪一下」那一类。
-     */
+    /** 用户自己那几副。同样要兜 null：老 voices.json 里可能没有 desc / gender / age / tags / bu。 */
     fun custom(): List<Voice> {
         mem?.let { return it }
         val list = runCatching {
@@ -98,13 +82,7 @@ class VoiceBox(ctx: Context) {
         return list
     }
 
-    /**
-     * 导入一包。
-     *
-     * 认的写法见 [Pack] —— 咱自己做的包、别家软件导出的包、纯数组、
-     * 包了一层 { voices: [...] }，都能读进来。内置已有的按名字合并，
-     * 不会长出重影。
-     */
+    /** 导入一包。认的写法见 [Pack] —— 咱自己做的包、别家软件导出的包、纯数组、包了一层 { voices: [...] }，都能读进来。 */
     fun import(raw: String): Pair<Int, String> {
         val (incoming, note) = Pack.read(raw)
         if (incoming.isEmpty()) return 0 to note
@@ -157,10 +135,6 @@ object Catalog {
 
     /**
      * 现在真正能用的那些音色。
-     *
-     * 只看开着的嗓子：MiMo 开着才有那 8 副，本机开着才有手机里的，
-     * 一副没开就是空。这样音色页上列出来的，每一副都真能响。
-     *
      * @param sys 本机语音包（调用方自己读好了传进来；系统 TTS 那条路上传空，避免自己调自己）
      */
     fun ours(
@@ -194,10 +168,7 @@ object Catalog {
         custom: List<Voice>,
         sys: List<Voice> = emptyList(),
     ): List<Pair<String, List<Voice>>> {
-        /*
-         * 模型空着的一副不列音色。音色挂在这副嗓源上，模型没填，点了也念不出来。
-         * 列出来还会让卡片写「8 个」，看着像清掉模型没生效。
-         */
+        /* 模型空着的一副不列音色。音色挂在这副嗓源上，模型没填，点了也念不出来。 */
         val on = engines.filter {
             it.on && (it.protocol == "system" || (it.model ?: "").isNotBlank())
         }
@@ -228,23 +199,13 @@ object Catalog {
             kind = "spoken",
             engine = e.id,
             param = t,
-            /*
-             * 描述留空。这一行的第二排已经有「家里名字 + 描述」两块，
-             * 这里再写一遍家名，屏幕上就是「硅基流动 硅基流动」。
-             */
+            /* 描述留空。这一行的第二排已经有「家里名字 + 描述」两块，这里再写一遍家名，屏幕上就是「硅基流动 硅基流动」。 */
             desc = "",
             builtin = true,
         )
     }
 
-    /**
-     * 音色名太长，界面上得给它一个能读的写法。
-     *
-     * 硅基的音色名是一整串「厂商/模型:名字」，`alex` 那一截才是人认得出的一半；
-     * 光写 `FunAudioLLM/CosyVoice2-0.5B:alex`，一屏放不下三个。
-     * 但英文名也不能删 —— 它对日志、对报错、对别人问「你用的哪个」的时候是唯一能对上的东西，
-     * 所以两个都留着：「沉稳男声 alex」。
-     */
+    /** 音色名太长，界面上得给它一个能读的写法。 */
     private fun label(token: String): String {
         val t = token.trim()
         val bare = if (t.contains(':')) t.substringAfterLast(':').trim() else t

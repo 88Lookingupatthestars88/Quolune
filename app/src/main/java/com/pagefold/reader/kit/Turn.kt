@@ -18,13 +18,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/**
- * 左右翻页。
- *
- * 关键设计：**不做跟手位移**。
- * 手指在屏幕上滑动时页面纹丝不动，只累积位移；松手后如果超过阈值，
- * 整页一次性滑到下一页。这样就消除了「拖到一半又弹回去」的粘滞感。
- */
+/** 左右翻页。关键设计：不做跟手位移。 */
 @Composable
 fun FlipDeck(
     count: Int,

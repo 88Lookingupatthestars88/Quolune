@@ -1,6 +1,7 @@
 package com.pagefold.reader
 
 import android.app.Application
+import kotlinx.coroutines.launch
 import java.io.File
 import com.pagefold.reader.book.Shelf
 import com.pagefold.reader.field.Field
@@ -8,11 +9,7 @@ import com.pagefold.reader.voice.Synth
 import com.pagefold.reader.voice.SysVoice
 import com.pagefold.reader.voice.VoiceBox
 
-/**
- * 应用级单例容器。所有长生命周期对象挂在这里：
- * 设置、书库、音色库、合成器、系统语音。
- * 播放器是 Service，单独活。
- */
+/** 应用级单例容器。所有长生命周期对象挂在这里：设置、书库、音色库、合成器、系统语音。 */
 class App : Application() {
 
     lateinit var field: Field
@@ -41,46 +38,33 @@ class App : Application() {
         // 每副音色自己那份调法，合成层要用它改语速、音调、音量。
         synth.tunes = vtune
         synth.sync(field.now)
-        // 验过的结论要落盘，得先给它一个地方。不接这一句，它只在内存里记，
-        // 重启应用就忘，于是"每进一次定音页就重验一遍"的老毛病又回来了。
+        // 给「验过的结论」一个落盘的地方，不接就只在内存里记。
         com.pagefold.reader.voice.Speak.attach(this)
-        // 旧书补一张版式快照。补的时候定音里是什么，这本书就是什么，
-        // 之后不再跟随 —— 一页一把，谁也不拽谁。
-        // 旧书补一张版式快照。shelf.all() 已经把旧存档里的 null 兜平了，
-        // 这里再加一层 runCatching —— 迁移失败不该把应用带走。
-        runCatching {
-            val now = field.now
-            val list = shelf.all()
-            var dirty = false
-            val out = list.map { b ->
-                val j = b.tuneJson ?: ""
-                if (com.pagefold.reader.field.Tune.has(j, "fontSize") && com.pagefold.reader.field.Tune.has(j, "turn")) b
-                else {
-                    dirty = true
-                    b.copy(tuneJson = com.pagefold.reader.field.Tune.snapshot(now, j))
+        /* 旧书补版式快照。挪到后台线程：这一步要读 shelf.json、给每本书拼一份 JSON。 */
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+            .launch {
+                runCatching {
+                    val now = field.now
+                    val list = shelf.all()
+                    var dirty = false
+                    val out = list.map { b ->
+                        val j = b.tuneJson ?: ""
+                        if (com.pagefold.reader.field.Tune.has(j, "fontSize") && com.pagefold.reader.field.Tune.has(j, "turn")) b
+                        else {
+                            dirty = true
+                            b.copy(tuneJson = com.pagefold.reader.field.Tune.snapshot(now, j))
+                        }
+                    }
+                    if (dirty) shelf.save(out)
                 }
             }
-            if (dirty) shelf.save(out)
-        }
     }
 
-    /**
-     * 崩了别只留个闪退。
-     *
-     * 异常栈写到 filesDir/last-crash.txt。下次再闪，把这个文件拿出来就能定位，
-     * 不用再靠猜。用 MT 管理器就能看：
-     * /data/data/com.pagefold.reader/files/last-crash.txt
-     */
+    /** 崩了别只留个闪退。异常栈写到 filesDir/last-crash.txt。 */
     private fun installCrashLog() {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            /*
-             * 取消不是崩溃。
-             *
-             * 协程被 cancel 时抛的是 CancellationException。它有时候会一路冒到
-             * 默认处理器 —— 那不是「应用出错」，是「这件事不做了」。
-             * 既不该写进崩溃记录（会让人以为又崩了一次），也不该交给系统杀进程。
-             */
+            /* 取消不是崩溃：协程 cancel 抛 CancellationException，不记崩溃、不杀进程。 */
             if (e is kotlinx.coroutines.CancellationException) {
                 return@setDefaultUncaughtExceptionHandler
             }
@@ -91,13 +75,7 @@ class App : Application() {
                 append(android.util.Log.getStackTraceString(e))
             }
             runCatching { File(filesDir, "last-crash.txt").writeText(dump) }
-            /*
-             * 再写一份到**外置**私有目录：
-             * /sdcard/Android/data/com.pagefold.reader/files/last-crash.txt
-             *
-             * 内部目录要 root 才能看，绝大多数人拿不到；外置这一个用手机自带文件管理器
-             * 就能打开，复制出来发给开发者即可。只写主线程之外也不怕，runCatching 兜着。
-             */
+            /* 再写一份到外置私有目录。只写主线程之外也不怕，runCatching 兜着。 */
             runCatching {
                 getExternalFilesDir(null)?.let { File(it, "last-crash.txt").writeText(dump) }
             }

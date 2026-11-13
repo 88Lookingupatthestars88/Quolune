@@ -9,19 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/**
- * 阿里百炼 · 千问语音合成（qwen3-tts）。
- *
- *   POST {base}/api/v1/services/aigc/multimodal-generation/generation
- *   Authorization: Bearer <key>
- *   { "model": "qwen3-tts-flash", "input": { "text": "...", "voice": "Cherry", "language_type": "Auto" } }
- *
- * 回来的是 JSON，音频**不在响应体里**，在 `output.audio.url`（有效期 24 小时），
- * 得再下载一次。所以这一支是「两次请求」。
- * 也兼容直接给 `output.audio.data`（base64）的部署。
- *
- * 单次文本上限 600 字符。我们按句切段，天然不撞；超了就在这一层截。
- */
+/** 阿里百炼 · 千问语音合成（qwen3-tts）。 */
 object Bailian {
 
     private val json = "application/json".toMediaType()
@@ -48,13 +36,7 @@ object Bailian {
         if (key.isBlank()) throw IOException("还没填钥匙")
         if (text.isBlank()) throw IOException("这一段是空的")
 
-        /*
-         * 这家单次上限 600 字符，是硬上限，超了直接 400。
-         *
-         * 原来是把多出来的字截掉 —— 一段八百字的正文，后两百字当场没了，
-         * 用户听着像「念到一半跳过去了」，而我们连个错都不报。
-         * 现在按句切开，一段一段要，回来再拼成一条。
-         */
+        /* 这家单次上限 600 字符，是硬上限，超了直接 400。 */
         val pieces = split(text, MAX_CHARS)
         if (pieces.size <= 1) return@withContext one(base, key, model, text, voice, lang)
 
@@ -67,12 +49,7 @@ object Bailian {
         return@withContext join(parts)
     }
 
-    /**
-     * 按句切成每段不超过 [max] 字。
-     *
-     * 切点从后往前找句末标点，找不到再退到逗号，再找不到才硬切。
-     * 早于本块三分之一的位置不切 —— 那会切出「好。」这种三个字的碎块。
-     */
+    /** 按句切成每段不超过 [max] 字。 */
     private fun split(text: String, max: Int): List<String> {
         val s = text.trim()
         if (s.length <= max) return listOf(s)
@@ -99,15 +76,7 @@ object Bailian {
         return out
     }
 
-    /**
-     * 几段音频拼成一条。
-     *
-     * 这家回来的是 wav（地址后缀 .wav）。wav 不能像 mp3 那样直接把字节摞起来 ——
-     * 每一段都带一个自己的头，摞起来播放器只认第一段，后面全当垃圾。
-     * 所以取第一段的格式，把所有 data 块接上，再重写一个头。
-     *
-     * 万一哪一段不是 wav（边关改过返回格式），退回直接摞 —— mp3 的帧流摞起来是能播的。
-     */
+    /** 几段音频拼成一条。这家回来的是 wav（地址后缀 .wav）。 */
     private fun join(parts: List<ByteArray>): ByteArray {
         if (parts.size == 1) return parts[0]
         if (parts.any { it.size < 44 || it[0] != 'R'.code.toByte() }) {

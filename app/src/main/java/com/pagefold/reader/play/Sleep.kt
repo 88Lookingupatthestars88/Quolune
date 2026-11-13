@@ -2,12 +2,7 @@ package com.pagefold.reader.play
 
 import android.os.SystemClock
 
-/**
- * 睡眠定时。
- *
- * 只管一个绝对时刻，不管播不播 —— 所以随时暂停、随时继续，倒计时照走。
- * 到点由播放器自己停，界面退出去了也停。
- */
+/** 睡眠定时。只管一个绝对时刻，不管播不播 —— 所以随时暂停、随时继续，倒计时照走。 */
 object Sleep {
     /** SystemClock.elapsedRealtime 的时刻。0 = 没开。 */
     @Volatile var deadline: Long = 0L

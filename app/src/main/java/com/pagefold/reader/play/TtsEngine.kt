@@ -11,18 +11,7 @@ import com.pagefold.reader.voice.Catalog
 import com.pagefold.reader.voice.Voice
 import java.util.Locale
 
-/**
- * 让别的应用也能用 Quolune 的声音。
- *
- * 系统那边的时序是这样的：它调 [onSynthesizeText]，引擎得**先把**
- * [SynthesisCallback.start] 调掉，它才开音频通道、才跟调用方说「开始了」。
- * 之前是等网络合成完才 start，于是「加载不出来」—— 调用方等三秒就当引擎死了。
- *
- * 现在：进来立刻 start(24000, 16bit, 单声道)，再一句一句合成、一句一句喂。
- * 采样率不跟引擎走，一律 24000；引擎吐 16k/22k/44k 都转过来。
- *
- * 还有一件：系统里选了 Quolune 就该出声，所以音色池空的时候兜底成第一副开着的嗓源。
- */
+/** 让别的应用也能用 Quolune 的声音。 */
 class TtsEngine : TextToSpeechService() {
 
     private companion object {
@@ -70,12 +59,7 @@ class TtsEngine : TextToSpeechService() {
         return out
     }
 
-    /**
-     * API 21 起，setLanguage 实际是「取这个 locale 的默认嗓音，再 setVoice」。
-     * 默认实现拿 Locale 去对 onGetVoices 的结果，对不上就返回 null，
-     * setVoice(null) 失败，setLanguage 跟着返回 ERROR —— 系统那边就成了
-     * 「语言选不动」。所以这里自己给一个。
-     */
+    /** API 21 起，setLanguage 实际是「取这个 locale 的默认嗓音，再 setVoice」。 */
     override fun onGetDefaultVoiceNameFor(lang: String?, country: String?, variant: String?): String {
         val l = lang?.lowercase(Locale.ROOT).orEmpty()
         val ok = l == "zho" || l == "chi" || l == "cmn" || l.startsWith("zh")
@@ -98,10 +82,7 @@ class TtsEngine : TextToSpeechService() {
 
     private fun tag(v: Voice): String = "tl:" + v.id
 
-    /**
-     * 调用方挑的是哪副嗓子。
-     * SynthesisRequest.getVoiceName() 是隐藏方法，只能反射；拿不到就当没指定。
-     */
+    /** 调用方挑的是哪副嗓子。SynthesisRequest.getVoiceName() 是隐藏方法，只能反射；拿不到就当没指定。 */
     private fun voiceNameOf(r: SynthesisRequest): String? = runCatching {
         val m = r.javaClass.getMethod("getVoiceName")
         m.isAccessible = true

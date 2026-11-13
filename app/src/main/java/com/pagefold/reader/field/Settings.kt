@@ -16,21 +16,13 @@ import kotlinx.coroutines.launch
 /** 翻页方式。 */
 enum class TurnMode { FLIP, SCROLL, CHAPTER }
 
-/**
- * `Settings.aiVoices` 里表示「一副都不给」的那一格。
- *
- * 空串是「还没定过 = 库里有的全给」，所以「一副都不给」必须另有一个记号 ——
- * 不然用户把最后一副点掉，画面会自己又全亮回来，看着像点了没反应。
- */
+/** Settings.aiVoices 里表示「一副都不给」的那一格。 */
 const val AI_NO_VOICE = "-"
 
 /** 朗读引擎。 */
 enum class EngineKind { MIMO, SYSTEM }
 
-/**
- * 全部可调项。整体序列化成一个 JSON 存在 SharedPreferences，
- * 加字段不用迁移，旧版本读到没有的字段自动用默认值。
- */
+/** 全部可调项。整体序列化成一个 JSON 存在 SharedPreferences，加字段不用迁移，旧版本读到没有的字段自动用默认值。 */
 data class Settings(
     // 外观
     val theme: String = "glass",
@@ -39,12 +31,7 @@ data class Settings(
     val shelfDim: Int = 55,             // 旧字段，界面上已经不给调了
     val bgJson: String = "",            // {"shelf":"image:/…|0.6|0|0|1.0", …}
     val enginesJson: String = "",       // 嗓子列表
-    /**
-     * 会想事的那几路接口（派角时用）。
-     *
-     * 跟嗓源分开存：念书和拿主意是两件事，模型名、计费、限流都不一样。
-     * 老存档里没有这一格 → 空串 → 读出出厂那一排（地址已经填好，只差钥匙）。
-     */
+    /** 会想事的那几路接口（派角时用）。 */
     val chatJson: String = "",
 
     // 头一屏是哪一页。3 = 定音。
@@ -113,31 +100,14 @@ data class Settings(
 
     // ── 怎么分配（让 AI 分组派嗓子） ──
     /**
-     * 「几句话以上才发」。用户自己写，默认 50。
-     *
-     * 以前写死 3，还只能加减；退出再进来又变回 3 —— 那是它根本没存。
-     * 现在存这一格，进来读到什么就是什么。
+     * 「几句话以上才发」。用户自己写，默认 50，存进存档。
      */
     val aiGate: Int = 50,
-    /**
-     * 发给 AI 的那段「怎么分」的说明。空 = 用出厂那份。
-     *
-     * 书里那本自己还存一份（在 castJson 的 prompt 字段），优先级更高。
-     * 用户在这本书里改过，就不动全局；点「存成默认」才写回这一格。
-     */
+    /** 发给 AI 的那段「怎么分」的说明。 */
     val aiPrompt: String = "",
-    /**
-     * 准 AI 自己造嗓音。
-     *
-     * 只有能造的那一路开着（目前是小米）才作数；没有这一格时派角永远是「从现成的里挑」。
-     * 书里那张纸还能临时改，但**起手的那一档在这里定** —— 用户不想每本书都去点一次。
-     */
+    /** 准 AI 自己造嗓音。只有能造的那一路开着（目前是小米）才作数；没有这一格时派角永远是「从现成的里挑」。 */
     val aiDesign: Boolean = false,
-    /**
-     * 准它用的那几副嗓子，逗号分隔。空 = 库里有的全给。
-     *
-     * 存名字不存 id：嗓子是用户自己看名字认的，id 换了人还得重选一遍。
-     */
+    /** 准它用的那几副嗓子，逗号分隔。 */
     val aiVoices: String = "",
 ) {
     val turn: TurnMode get() = runCatching { TurnMode.valueOf(turnMode) }.getOrDefault(TurnMode.FLIP)
@@ -156,22 +126,10 @@ data class Settings(
     val canDesign: Boolean
         get() = engines.any { it.on && it.src == VoiceSource.MIMO }
 
-    /**
-     * 声源表。**这一句会被界面每帧调到**，所以绝不许抛。
-     *
-     * 老存档里有几格是 Gson 塞进来的 null（见 EngineCfg.proto 的注释），
-     * 一抛就是整页白屏、应用消失。这里兜一次，最坏退回内置那两副。
-     */
+    /** 声源表。这一句会被界面每帧调到，所以绝不许抛。 */
     val engines: List<EngineCfg>
         get() {
-            /*
-             * 缓存一层。
-             *
-             * 这个 getter 一帧里会被叫好几次（阅读页每个 remember 的 key、
-             * 播放器每一句的取音色、音色页的分组），每次都是「Gson 解析一整串 JSON」。
-             * 滚动、翻页、朗读时这是白烧 CPU —— 4GB 的机器上就是掉帧和发烫。
-             * 键就是那串 JSON 本身：内容没变就直接还上一次的结果。
-             */
+            /* 缓存一层。这个 getter 一帧里会被叫好几次（阅读页每个 remember 的 key、播放器每一句的取音色、音色页的分组）。 */
             val key = enginesJson
             EnginesCache.hit(key)?.let { return it }
             val v = runCatching { Engines.decode(key) }.getOrDefault(Engines.DEFAULT)
@@ -179,9 +137,7 @@ data class Settings(
             return v
         }
 
-    /**
-     * 接口表。跟 [engines] 一样要缓存 —— 这个 getter 也会被界面每帧叫到。
-     */
+    /** 接口表。跟 [engines] 一样要缓存 —— 这个 getter 也会被界面每帧叫到。 */
     val chats: List<com.pagefold.reader.voice.ChatCfg>
         get() {
             val key = chatJson
@@ -192,12 +148,7 @@ data class Settings(
             return v
         }
 
-    /**
-     * 某一页的底子。空 = 跟着主题走。
-     *
-     * BgLayer 每帧都会调一次，所以解析结果要留住。每帧 Gson 解析一遍 bgJson，
-     * 滑滑块的时候就是几十次每秒。
-     */
+    /** 某一页的底子。空 = 跟着主题走。 */
     fun bg(page: String): String {
         val raw = bgJson
         if (raw.isNullOrBlank()) {
@@ -230,12 +181,7 @@ data class Settings(
         copy(chatJson = com.pagefold.reader.voice.Chats.encode(list))
 }
 
-/**
- * bgJson 的单槽解析缓存。
- *
- * 放在 data class 外面 —— Settings 每改一个字段就走一次 copy()，新对象里存缓存的话
- * 每帧都会丢。而 BgLayer 每帧都要问「这一页的底子是什么」。
- */
+/** bgJson 的单槽解析缓存。 */
 private object BgCache {
     private var raw: String? = null
     private var map: Map<String, String> = emptyMap()
@@ -290,9 +236,7 @@ private object EnginesCache {
     }
 }
 
-/**
- * 设置仓。写入即落盘，同时推给 UI。
- */
+/** 设置仓。写入即落盘，同时推给 UI。 */
 /** 存档版本。抬一格就代表下面 read() 里要多一段迁移。 */
 const val REV = 5
 
@@ -307,15 +251,7 @@ class Field(ctx: Context) {
 
     val now: Settings get() = _state.value
 
-    /**
-     * 读存档。
-     *
-     * Gson 反序列化不走 Kotlin 构造器，data class 的默认值全部失效：
-     * 存档里没有的键会变成 null / 0 / false，不是 Settings() 里写的那些值。
-     * 新加的 cue / next 落进旧存档，读出来就是 null，用的时候直接炸。
-     *
-     * 所以先用 Settings() 打底，再把存档里有的键盖上去。以后加字段不用写迁移。
-     */
+    /** 读存档。Gson 反序列化不走 Kotlin 构造器。 */
     private fun read(): Settings = runCatching {
         val raw = sp.getString("json", null) ?: return@runCatching Settings(uiRev = REV)
         val stored = runCatching { gson.fromJson(raw, JsonObject::class.java) }.getOrNull()
@@ -338,12 +274,7 @@ class Field(ctx: Context) {
         out.copy(uiRev = REV)
     }.getOrDefault(Settings(uiRev = REV))
 
-    /**
-     * 写。内存立刻生效，落盘压到 300 毫秒后。
-     *
-     * 拖滑块的时候 onValueChange 是每帧一次，原来每帧都 Gson 序列化 + 写盘，
-     * 一秒几十次 —— 这就是「特别卡」。现在攒一次再写。
-     */
+    /** 写。内存立刻生效，落盘压到 300 毫秒后。 */
     fun put(s: Settings) {
         _state.value = s
         pending?.cancel()

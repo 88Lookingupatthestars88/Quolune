@@ -4,13 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 
-/**
- * 一句待朗读的文本。
- *
- * srcStart / srcEnd 是这一句在**本章正文**里的字符区间（闭开区间）。
- * 没有它，播放器只知道「第几行」，界面只知道「第几段」，
- * 两套坐标对不上 —— 从某处开始听就会偏、念到哪也没法高亮。
- */
+/** 一句待朗读的文本。srcStart / srcEnd 是这一句在本章正文里的字符区间（闭开区间）。 */
 data class Line(
     val text: String,
     val isDialog: Boolean,
@@ -24,7 +18,6 @@ data class Line(
 
 /**
  * 一条匹配规则：用什么正则认出一个人，认出来派给谁。
- *
  * @param character 这条规则派给谁。必须跟角色表里的名字一模一样。
  * @param pattern   正则。只在引号外面那半句里找，不碰正文。
  * @param afterDialog 看引号后面那半句（true）还是前面（false）
@@ -53,7 +46,6 @@ data class CastRule(
 
 /**
  * 自动匹配时数出来的一个人。
- *
  * @param lines 这本书里他有多少句台词。用来排序，也用来决定「值不值得单独配一副嗓子」。
  * @param on    用户勾上没有。默认只勾台词多的那几个。
  */
@@ -67,10 +59,7 @@ data class CastName(
     val alt: List<String> = emptyList(),
     /**
      * 他说过的一句话，四十字以内。
-     *
-     * 只为一件事：派角时让模型看得出这人是什么身份。
      * 光给名字，它只能按字面猜；给一句台词，「末将听令」和「臣以为不可」就分得开。
-     * 数是顺手拿的（[com.pagefold.reader.book.Look.speakers] 那一遍扫描），不额外扫书。
      */
     val sample: String = "",
 )
@@ -109,14 +98,7 @@ data class Rule(
     fun bad(): Boolean = regex() == null
 }
 
-/**
- * 一本书的角色表。存成 .tlcast。
- *
- * 分两层：
- *   roles  —— 有谁，各用哪副嗓子
- *   rules  —— 怎么认出他，一条一行正则
- * 一个人可以有好几种叫法，所以是几条规则指向同一个人，不是一个人一条规则。
- */
+/** 一本书的角色表。存成 .tlcast。 */
 data class CastBook(
     val v: Int = 4,
     val name: String = "",
@@ -138,21 +120,11 @@ data class CastBook(
     val sex: Map<String, String> = emptyMap(),
     /** 用户点掉的词。题材包里点了不要的，收在这一串里，合成词表时减掉。 */
     val off: List<String> = emptyList(),
-    /**
-     * 单句改派。规则认出来的人被它盖掉，只认这一个位置。
-     *
-     * 跟 [rules] 是两层：规则改一个会影响成千上万句，改一句不该动规则。
-     * 见 [Pin]。
-     */
+    /** 单句改派。规则认出来的人被它盖掉，只认这一个位置。 */
     val pins: List<Pin> = emptyList(),
     /** 读的时候在每段对白前面标出是谁在说话。这本书自己的开关，跟念法同一层。 */
     val mark: Boolean = false,
-    /**
-     * 这本书自己的「怎么分」。空 = 跟全局那一段（[Settings.aiPrompt]），再空就跟出厂那份。
-     *
-     * 为什么按书存：同一套分派口径，古装戏和都市戏不是一回事。
-     * 但也不该逼人每本重写一遍 —— 所以默认跟全局，改过才单存。
-     */
+    /** 这本书自己的「怎么分」。空 = 跟全局那一段（[Settings.aiPrompt]），再空就跟出厂那份。 */
     val prompt: String = "",
 ) {
 
@@ -193,16 +165,7 @@ data class CastBook(
     )
 }
 
-/**
- * 角色表的读写。
- *
- * 写出去的长这样：
- *   {"narration":{"voice":"白桦","style":""},"dialogue":{…},
- *    "characters":{"林瑾":{"voice":"云健"}},"matchRules":[{"character":"林瑾","pattern":"…"}]}
- *
- * 读进来三种都认：上面这个、带 v 的老格式、和一行一条的文本。
- * 三种最后都汇成 [CastBook]，界面只认那一个。
- */
+/** 角色表的读写。写出去的长这样：{"narration":{"voice":"白桦","style":""},"dialogue":{…},。 */
 object RuleCodec {
 
     private val gson = Gson()
@@ -337,11 +300,7 @@ object RuleCodec {
                         rules += CastRule(
                             character = who,
                             pattern = pat,
-                            /*
-                             * 两个键名都认：我们自己写的是 afterDialog，别处生成的配置
-                             * 写的是 afterDialogue。只认一个的话，导进来的规则会全部
-                             * 当成「前后都看」—— 看着能用，其实换了套判法。
-                             */
+                            /* 两个键名都认：我们自己写的是 afterDialog，别处生成的配置写的是 afterDialogue。 */
                             afterDialog = runCatching {
                                 o.get("afterDialog")?.asBoolean ?: o.get("afterDialogue")?.asBoolean
                             }.getOrNull() ?: false,
@@ -390,13 +349,7 @@ object RuleCodec {
                 mark = runCatching { root.get("mark")?.asBoolean }.getOrNull() ?: false,
                 prompt = str(root, "prompt"),
             ).let { b0 ->
-                /*
-                 * 类别名换真名。
-                 *
-                 * 老配置里 characters 的键是「秦·帝王」，真人名在 pattern 里。
-                 * 照类别名建组，界面上就全是类别名，用户认不出那是谁。
-                 * 有 pattern 就用里面那第一个名字当组名，类别名收进别名。
-                 */
+                /* 类别名换真名。老配置里 characters 的键是「秦·帝王」，真人名在 pattern 里。 */
                 val b = b0.copy(
                     roles = b0.roles.map { r ->
                         val members = b0.rules.filter { it.character == r.name }
@@ -413,11 +366,7 @@ object RuleCodec {
                     b.roles.none { it.name == n }
                 }
                 val withRoles = b.copy(roles = b.roles + missing.map { CastRole(it) })
-                /*
-                 * 别处生成的配置只有 characters，没有 pool。列表是照 pool 画的，
-                 * 于是「导进来有角色，界面上却一个都没有，只剩规则」。
-                 * 名单空着就照角色表补一份，全部勾上 —— 人是他自己配好的，不用再挑。
-                 */
+                /* 别处生成的配置只有 characters，没有 pool。 */
                 if (withRoles.pool.isEmpty() && withRoles.roles.isNotEmpty()) {
                     // 同上：名单要写全，勾只给单人角色。
                     val p = ArrayList<CastName>(withRoles.roles.size * 2)
@@ -468,12 +417,7 @@ object RuleCodec {
         return out.copy(roles = roles, rules = rules)
     }
 
-    /**
-     * 一行一条：谁 | 嗓子 | 正则 [| 前/后]
-     *
-     * 第二、三列可以空。正则里带竖线是常态（`(说道|沉声道)`），
-     * 所以只从左往右切两刀，后面整段都算正则。split 全切会把正则切碎。
-     */
+    /** 一行一条：谁 | 嗓子 | 正则 [| 前/后]第二、三列可以空。 */
     fun fromText(raw: String): List<CastRule> {
         val out = ArrayList<CastRule>()
         raw.lines().forEach { line ->
@@ -506,18 +450,7 @@ object RuleCodec {
     private val SLOT_NARR = setOf("旁白", "说白", "narrator", "narration", "叙述")
     private val SLOT_DIAL = setOf("对白", "白口", "dialog", "dialogue", "对话")
 
-    /**
-     * 一行一组：
-     *
-     *     （赵惊鸿）苏打
-     *     （嬴政 扶苏 胡亥）秦·帝王
-     *     旁白 白桦
-     *     对白 苏打
-     *
-     * 括号里是这一组的人（书里怎么写就怎么写），括号后面是这一组用的嗓子。
-     * 组名默认取括号里第一个人的名字 —— 那是书里的真名，不是「秦·帝王」这种类别名。
-     * 不带括号的「名字 嗓子」也认，就是一个人一组。
-     */
+    /** 一行一组：（赵惊鸿）苏打（嬴政 扶苏 胡亥）秦·帝王旁白 白桦对白 苏打括号里是这一组的人（书里怎么写就怎么写），括号后面是这一组用的嗓子。 */
     fun fromGroups(raw: String): CastBook {
         var nar = ""
         var dia = ""
@@ -537,13 +470,7 @@ object RuleCodec {
                     if (ways.isNotEmpty()) {
                         val name = ways.first()
                         roles.removeAll { it.name == name }
-                        /*
-                         * 第一个是组名，alt 只装「组名以外的人」。
-                         *
-                         * 组名可能是人（「嬴政」），也可能只是个标签（「众臣」）——
-                         * 这件事在这里判不了，交给界面按名单查：名单里有这个名字，
-                         * 他就是人，人数加一、成员表里也要写上他。写进 alt 就会算两遍。
-                         */
+                        /* 第一个是组名，alt 只装「组名以外的人」。 */
                         roles.add(CastRole(name, voice, alt = ways.drop(1).filter { it != name }))
                     }
                     return@forEach
@@ -563,12 +490,7 @@ object RuleCodec {
             roles.add(CastRole(head, rest))
         }
         // 名单：正名一行（勾上），别名不必各占一行 —— 别名在角色里，认人的时候一起编进去。
-        /*
-         * 名单里要写全所有名字 —— 组名、组员都写。
-         *
-         * 不写组员，列表算句数时查不到他（句数是从名单里按名字取的），整组就显示 0 句。
-         * 但勾只给单人角色：组员不单独占一行，勾着反而会让同一人出现两次。
-         */
+        /* 名单里要写全所有名字 —— 组名、组员都写。 */
         val pool = ArrayList<CastName>(roles.size * 2)
         roles.forEach { r ->
             val all = r.ways()
@@ -577,12 +499,7 @@ object RuleCodec {
         return CastBook(narrator = nar, dialog = dia, roles = roles, pool = pool)
     }
 
-    /**
-     * 导出一行一组。
-     *
-     * 只写名字和嗓子，不写正则 —— 正则是一次性的兜底，换个应用、换本书都没用，
-     * 混在文件里只会让人以为那是必须的。
-     */
+    /** 导出一行一组。只写名字和嗓子，不写正则 —— 正则是一次性的兜底，换个应用、换本书都没用，混在文件里只会让人以为那是必须的。 */
     fun toGroups(cast: CastBook, title: String = ""): String = buildString {
         appendLine("# 派角" + if (title.isNotBlank()) " · $title" else "")
         appendLine("# 一行一组：括号里是这一组的人，括号后面是这一组用的嗓子。")
@@ -597,16 +514,7 @@ object RuleCodec {
         }
     }
 
-    /**
-     * 从一条老正则里，把这一组的人扒出来。
-     *
-     * 早先那套配置的 characters 写的是「秦·谋士」这种类别名，真名在 pattern 里：
-     * `(?:(?:姜元让|黄石公|张良|林瑾|萧何|彭堰|韩信|范增|李斯))(?:道|说道|…)`。
-     * 照类别名建组，界面上就全是类别名 —— 「他都不是真名」说的就是这个。
-     *
-     * 取的是第一个「全部由 2–4 字人名用竖线连起来」的组，跳过前面那个否定预查
-     * （`(?!(?:A|B|C))` 里也全是人名，但那是「除了这些人以外」的意思，不能当成员）。
-     */
+    /** 从一条老正则里，把这一组的人扒出来。 */
     /** 长得像一组、其实不是人的那些。 */
     private val NOISE = setOf(
         "传来", "响起", "传出", "声音", "话音", "说道", "开口", "喃喃", "低声", "沉声",
@@ -618,10 +526,7 @@ object RuleCodec {
 
     fun membersIn(pattern: String): List<String> {
         for (m in GROUP_IN_PATTERN.findAll(pattern)) {
-            /*
-             * `(?!(?:A|B|C))` 里也全是人名，但那是「除了这些人以外」的意思，不能当成员。
-             * 它的长相是 `(?!(?:` —— 判断这四个字符，而不是判断 `(?:` 前面那两个字。
-             */
+            /* (?!(?:A|B|C)) 里也全是人名，但那是「除了这些人以外」的意思，不能当成员。 */
             val st = m.range.first
             if (st >= 2 && pattern[st - 1] in "!=<" && pattern[st - 2] == '?') continue
             val list = m.groupValues[1].split('|').map { it.trim() }
@@ -680,16 +585,7 @@ data class CastProfile(
     val ban: Ban? = null,
 )
 
-/**
- * 分角色引擎。
- *
- * 处理顺序：
- *   段落 → 切成「旁白 / 对白」交替片段 → 每句对白找说话人 → 找不到就交替推断 → 再不行用默认音色
- *
- * 比「只看引号前 256 字」的做法多两层兜底：
- *   1. 连续对白：第一句定了人，第二句如果没线索，按 A→B→A 交替推
- *   2. 段落级的「某某说」会被整段共享，不再局限于紧邻的一句
- */
+/** 分角色引擎。处理顺序：段落 → 切成「旁白 / 对白」交替片段 → 每句对白找说话人 → 找不到就交替推断 → 再不行用默认音色比「只看引。 */
 object Cast {
 
     private val QUOTE_PAIRS = listOf(
@@ -698,9 +594,7 @@ object Cast {
 
     /**
      * 把一章正文切成带说话人、带字符区间的行序列。
-     *
      * @param chunk 单行上限。超过就找最近的句末切一刀 —— 太长的段一次合成等得久，
-     *              而且服务端会静默截断。0 = 不切。
      */
     fun plan(text: String, p: CastProfile, chunk: Int = 800, pins: Map<Int, String> = emptyMap()): List<Line> {
         val out = ArrayList<Line>(256)
@@ -756,13 +650,7 @@ object Cast {
 
                 var hit = matchRules(beforeCtx, afterCtx, p.rules)
                 var name = hit?.role
-                /*
-                 * 手写规则没命中，走六层判定。
-                 *
-                 * 六层的证据比「整段里提到过谁」硬得多：先看引号紧邻那一小句的主谓，
-                 * 再看代词，再看整段唯一，最后才退到段首。规则在前是因为那是用户自己写的，
-                 * 写错了也应该由他自己看见结果 —— 不是被引擎偷偷盖掉。
-                 */
+                /* 手写规则没命中，走六层判定。 */
                 if (name == null) name = p.ban?.let { Speaker.at(beforeCtx, afterCtx, lead, it) }
                 if (name == null && paraNames.size > 1) {
                     name = paraNames.firstOrNull { it != lastSpeaker } ?: paraNames.last()
@@ -777,13 +665,7 @@ object Cast {
                 // 规则里写了嗓子就用它；没写就按名字查一次；再没有就用白口那副。
                 val voice = hit?.voice?.takeIf { it.isNotBlank() }
                     ?: (if (name != null) voiceFor(name, p) else p.defaultVoice)
-                /*
-                 * 单句改派。
-                 *
-                 * pins 的键是「这一句在本章正文里的起点」，跟 Line.srcStart 同一把尺子。
-                 * 上一版只把 pin 画进名字签，念的时候仍是引擎认的那个人 ——
-                 * 用户改完一句，看着改了，听着没改。这里在切块那一层盖掉。
-                 */
+                /* 单句改派。pins 的键是「这一句在本章正文里的起点」，跟 Line.srcStart 同一把尺子。 */
                 var who0: String? = null
                 cut(para, seg.from, seg.to, chunk) { a, b ->
                     Wash.of(para.substring(a, b)).takeIf { it.isNotBlank() }?.let { t ->
@@ -903,22 +785,13 @@ object Cast {
         return null
     }
 
-    /**
-     * 这个角色用哪副嗓子。
-     *
-     * 查角色表，查不到才用白口那副。返回 `name.ifBlank { defaultVoice }` 不行：
-     * 那样每一行 voice 都是「林瑾」「赵高」这种人名，音色库里没有，合成时全落回默认。
-     */
+    /** 这个角色用哪副嗓子。查角色表，查不到才用白口那副。 */
     private fun voiceFor(name: String, p: CastProfile): String =
         p.voices[name]?.takeIf { it.isNotBlank() } ?: p.defaultVoice
 
     // ─────────── 内置模板 ───────────
 
-    /**
-     * 通用中文网文模板。
-     * 覆盖：说道 / 道 / 笑道 / 冷声道 / 沉声 / 怒道 / 低声 / 开口 / 问 / 答 / 喝道 …
-     * 名字用「2–4 个汉字」捕获，不依赖具体人名，所以任何书都能先跑起来。
-     */
+    /** 通用中文网文模板。覆盖：说道 / 道 / 笑道 / 冷声道 / 沉声 / 怒道 / 低声 / 开口 / 问 / 答 / 喝道 …名字用「2。 */
     val TEMPLATE: String = """
 # 一行一条：谁 | 嗓音 | 正则 [| 后]
 # 正则里带竖线没问题，只切前两刀。

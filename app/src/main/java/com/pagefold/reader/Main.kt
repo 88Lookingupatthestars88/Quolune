@@ -54,11 +54,7 @@ import com.pagefold.reader.ui.VoiceScreen
 
 class Main : ComponentActivity() {
 
-    /**
-     * 系统「文字转语音」里点 Quolune 右边那个齿轮，走的就是这个 Activity
-     * （tts_engine.xml 的 settingsActivity 指向这里）。
-     * 那种启动没有 action，只有显式组件 —— 凭这一点认出它，直接落到音色页。
-     */
+    /** 系统「文字转语音」里点 Quolune 右边那个齿轮。 */
     private fun cameFromTts(): Boolean {
         val i = intent ?: return false
         if (i.action == "android.speech.tts.engine.CONFIGURE_ENGINE") return true
@@ -68,11 +64,7 @@ class Main : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // 导航条留在原地，但不要那条白底。
-        //
-        // 不把整条收起来：收起来更难看，翻页时系统会自己把它放回来，
-        // 露出来是一块刷白的空条，跟纸色撞得厉害。所以不收了，
-        // 改成「透过去」：条子透明，下面就是纸；图标跟着主题翻黑白。
+        // 导航条透明：整条不收，翻页时它自己回来时不会刷出一条白底。
         runCatching {
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             if (android.os.Build.VERSION.SDK_INT >= 29) {
@@ -101,7 +93,9 @@ class Main : ComponentActivity() {
 
     /** 退到后台就把攒着的改动落盘，别等进程被杀。 */
     override fun onStop() {
-        runCatching { (application as App).field.flush() }
+        val a = application as App
+        runCatching { a.field.flush() }
+        runCatching { a.shelf.flush() }
         super.onStop()
     }
 }
@@ -158,13 +152,7 @@ private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
             }
         }
 
-        /*
-         * 顶上那一条：「AI 已排好」。
-         *
-         * 排这件事在 AiJob 里跑，人可能在别的页翻书、在音色页调调门。
-         * 排完了不把人拽回去，只在这儿放一条 —— 他自己决定什么时候看。
-         * 点它就是回那本书、把派角纸摊开、落在结果那一屏。
-         */
+        /* 顶上那一条：「AI 已排好」。 */
         if (AiJob.fresh && !AiJob.open) {
             val sk = LocalSkin.current
             Row(
@@ -194,10 +182,7 @@ private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
             }
         }
 
-        // 头一次进来落「定音」。
-        //
-        // 嗓源、钥匙、念法都在这张案上。不先把它们拨对，进了书按播放也是静音，
-        // 那种「装了没声音」比「先看一页设置」难受得多。定完他自己会去书房。
+        // 头一次进来落「定音」：嗓源和钥匙没拨对，进书按播放是静音。
         LaunchedEffect(Unit) {
             if (!s.choseHome) app.field.edit { it.copy(homeTab = 3, choseHome = true) }
         }

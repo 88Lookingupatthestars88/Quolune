@@ -56,6 +56,7 @@ import com.pagefold.reader.kit.Empty
 import com.pagefold.reader.kit.IconBtn
 import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.Sz
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.voice.Audition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,13 +72,7 @@ enum class StoreKind(val title: String, val note: String) {
         "念过的段落",
         "点一句就重放。勾上删掉，那一段从此要重新去要。"
     ),
-    /*
-     * 试听留下的，单列一本账。
-     *
-     * 音色页点「听一下」、复刻页点「听听像不像」，念的都是同一句「这一段，念给你听。」。
-     * 这些跟书里的正文混在一张表里，谁都分不清哪条是该留的，也不敢全选删掉。
-     * 分开列，删起来才下得去手。
-     */
+    /* 试听留下的，单列一本账。音色页点「听一下」、复刻页点「听听像不像」，念的都是同一句「这一段，念给你听。 */
     TRIAL(
         "试听留下的",
         "点一下听个响造出来的，不是书里的字。删干净也不影响正文。"
@@ -143,13 +138,7 @@ fun StoreScreen(
         val jobs = ids.mapNotNull { id -> rows.firstOrNull { it.id == id } }
         picked = picked - ids
         scope.launch {
-            /*
-             * 一件一件来，每一件单独兜。
-             *
-             * 以前是一条链子贯到底：中间哪一件抛了，后面的全不执行，
-             * 连下面的 gen++ 都到不了 —— 屏幕一动不动，看着就是「删不掉」。
-             * 现在失败的那件记下来，其余照删，刷不刷新也不受影响。
-             */
+            /* 一件一件来，每件单独兜，失败不影响其余。 */
             var bad = 0
             var why = ""
             withContext(Dispatchers.IO) {
@@ -231,10 +220,7 @@ fun StoreScreen(
                         fontSize = 13.sp, color = skin.flame,
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) {
+                            .tap {
                                 picked = if (allOn) emptySet() else rows.map { it.id }.toSet()
                             }
                             .padding(horizontal = 10.dp, vertical = 8.dp)
@@ -296,7 +282,7 @@ private fun PieceRow(
             .clip(RoundedCornerShape(skin.rCard))
             .background(skin.surface)
             .border(1.dp, if (on) skin.flame.copy(alpha = 0.5f) else skin.hairSoft, RoundedCornerShape(skin.rCard))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onPick() }
+            .tap { onPick() }
             .padding(start = 12.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -337,10 +323,7 @@ private fun PieceRow(
                 Modifier.size(36.dp)
                     .clip(CircleShape)
                     .background(if (playing) skin.flame.copy(alpha = 0.16f) else Color.Transparent)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { onPlay() },
+                    .tap { onPlay() },
                 contentAlignment = Alignment.Center
             ) {
                 if (playing) {

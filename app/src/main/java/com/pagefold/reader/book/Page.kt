@@ -8,15 +8,7 @@ import androidx.compose.ui.unit.Constraints
 /** 一页：文字 + 在章节内的起始字符偏移（用于和朗读对齐）。 */
 data class Page(val text: String, val start: Int, val end: Int)
 
-/**
- * 把一章正文切成页。
- *
- * 做法：逐段累加，用 TextMeasurer 实测高度，超页高就收页。
- * 单段超高时按句号再拆，避免一页只放半段。
- *
- * 之所以不用「按字数估」：中英混排、标点、缩进的宽度差很大，
- * 估算会在长段上出现半页空白或者溢出两行。
- */
+/** 把一章正文切成页。做法：逐段累加，用 TextMeasurer 实测高度，超页高就收页。 */
 fun paginate(
     m: TextMeasurer,
     text: String,

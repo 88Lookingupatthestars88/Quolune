@@ -146,6 +146,7 @@ import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.PickChip
 import com.pagefold.reader.kit.Paper
 import com.pagefold.reader.kit.T
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.play.BookPlayer
 import com.pagefold.reader.play.Feed
 import com.pagefold.reader.play.Sleep
@@ -153,7 +154,9 @@ import com.pagefold.reader.voice.Catalog
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -222,23 +225,7 @@ private class Atlas(
     }
 
     companion object {
-        /*
-         * 一块多大。
-         *
-         * **必须比一屏矮。** 选字时 SelectionContainer 会请求「让这一块可见」，
-         * LazyColumn 对超过一屏的块只能做到「块的边对齐视口」——露出一角就算数，
-         * 于是拖着手柄往下选，滚一下就停住，再也下不去。
-         * 块缩到半屏左右之后，这个请求就能真正把下一块拉进视野，选字可以一路拖到底。
-         *
-         * 顺带两个好处：跟读定位更细（块内行偏移算得更准）、单块重排更便宜。
-         */
-        /*
-         * 一块多大。
-         *
-         * 选字只能在本块内，所以块不能太小 —— 太小就是「只能选三个字」。
-         * 一屏大约六百到八百字，取 700 字 / 5 段，一屏多一点，
-         * 既能选到完整的一两段话，又不会让单块排版太重。
-         */
+        /* 一块多大：一屏约七百字，取 700 字 / 5 段；必须比一屏矮，选字才能一路拖到底。 */
         private const val BLOCK_CHARS = 700
         private const val BLOCK_PARAS = 5
 
@@ -311,19 +298,8 @@ private class Atlas(
 private class Slot<T>(var v: T? = null)
 
 /**
- * 一章排好的字。
- *
- * **它是「长出来的」，不是一次排完的。**
- *
- * 上一版 buildLaid 一上来就把整章的段全拼成一串、再交给排版器 ——
- * 一章五十万字的时候，那一串是五十万个字符、几万个段落，量一次要好几百毫秒，
- * 页表还要再切上百页。点开就卡死，用户那边「一章五十万字直接卡死」就是它。
- *
- * 现在按**段**往里长：要多少字长多少字（[grow]），翻到哪儿长到哪儿。
+ * 一章排好的字。它是「长出来的」，不是一次排完的。
  * 每页只从这串字里切自己那一段（[slice]），排版器每次只量一页。
- *
- * 坐标还是老规矩：外面用「原文偏移」，里面用「排好的位置」，两头靠
- * [rendered] / [abs] 换。签子插在正文中间，那几个字符要减掉，不然差几个字。
  */
 private class Laid(
     private val a: Atlas,
@@ -348,28 +324,14 @@ private class Laid(
     private val gt = ArrayList<Int>(512)
     private val gn = ArrayList<Int>(512)
 
-    /**
-     * 段间那条空行在这串字里的位置（[GAP] 那个字符的下标）。
-     *
-     * 切页时按页把落在这一页里的几条挂上 `ParagraphStyle` —— 行高写在那一段上，
-     * 段间距才不会跟着整页的行距一起变。
-     */
+    /** 段间那条空行在这串字里的位置（[GAP] 那个字符的下标）。 */
     private val gaps = ArrayList<Int>(64)
 
-    /**
-     * 段与段之间**多**空出来的高度（sp）。0 = 一个都不多给，跟没有这一格时一样。
-     *
-     * 用 sp 不用 dp：它跟字号、行距是一路的东西，系统字号调大，段间距跟着放大。
-     */
+    /** 段与段之间多空出来的高度（sp）。 */
     val gapSp: Float = paraGap.coerceIn(0, 40).toFloat()
 
     /**
      * 那条空行里每一行的高度 —— 是 [gapSp] 的一半。
-     *
-     * 一段文字末尾带一个换行，排版器会把它算成**两行**：一行是那个零宽字符，
-     * 一行是换行后面那个空的。两行同属这一段，所以都吃同一个行高。
-     * 直接写 gapSp 的话，最后落在屏幕上就是 2 × gapSp —— 用户量到的
-     * 「拖到最小仍隔着一整行」「10 号看着像两行」就是这个二倍。
      * 减半，两行加起来正好一个 gapSp。
      */
     private val gapLineSp: Float get() = gapSp / 2f
@@ -389,13 +351,7 @@ private class Laid(
         var s0 = segFrom.coerceIn(0, a.pFrom.size)
         val e0 = segTo.coerceIn(s0, a.pFrom.size)
         var t = title0.trim()
-        /*
-         * 这一块前面要不要写章名。
-         *
-         * 整章排版时 t 是空的，但章首那一行本来就常常是章名（正文第一段就是
-         * 「第一章　河湾的雾」）。以前 buildLaid 无条件补一行标题、再把重复的那段
-         * 跳掉；现在照旧 —— 不补的话，翻页那一档整个章名就没了。
-         */
+        /* 这一块前面要不要写章名。整章排版时 t 是空的，但章首那一行本来就常常是章名（正文第一段就是「第一章　河湾的雾」）。 */
         if (t.isEmpty() && s0 == a.pStartOf(ch) && s0 < e0) {
             t = a.chTitle.getOrElse(ch) { "" }.trim()
         }
@@ -436,15 +392,7 @@ private class Laid(
     private fun step() {
         if (k >= stop) { built = true; return }
         if (sb.length > headLen) {
-            /*
-             * 段间那条空行：一个换行收掉上一段，再单起一段只放一个零宽字符。
-             *
-             * 以前这里只写一个 '\n' —— 那是「换行」，不是「空一行」：两段之间的距离
-             * 就等于行距，段间距那一格调多少都一样。
-             * 现在多出来的高度由这条空行自己那一行担着（见 [slice]）。
-             *
-             * gapSp 是 0 的时候**一个字都不插**：版面跟没有这一格的时候逐字节一样。
-             */
+            /* 段间那条空行：一个换行收掉上一段，再单起一段只放一个零宽字符。 */
             sb.append('\n')
             if (gapSp > 0f) {
                 gaps.add(sb.length)
@@ -458,12 +406,7 @@ private class Laid(
         ss.add(sb.length)
         sa.add(p0)
         gt.add(tf.size)
-        /*
-         * 名字签挂在**每一句**的引号前，不挂在段首。
-         *
-         * 一段里两个人说话就两个签，各落在自己那句头上。签不换行，
-         * 只在行里插两三个小字，版式一行不多。
-         */
+        /* 名字签挂在每一句的引号前，不挂在段首。 */
         if (marks == null || marks!!.isEmpty() || p1 <= p0) {
             gn.add(0)
             sb.append(a.text, p0, p1)
@@ -503,12 +446,7 @@ private class Laid(
         return if (r < tt[i]) ta[i] else null
     }
 
-    /**
-     * 从 [r0] 往后跳过段间的换行与空行，落在下一个真正的字上。
-     *
-     * 切页时页首不能从一条空行开始：上一页已经把段收掉了，这一页再吃一条空行，
-     * 页顶就凭空空出半截，而且每翻一页都多一次。
-     */
+    /** 从 [r0] 往后跳过段间的换行与空行，落在下一个真正的字上。 */
     fun skipGaps(r0: Int): Int {
         var r = r0.coerceIn(0, sb.length)
         while (r < sb.length && (sb[r] == '\n' || sb[r] == GAP)) r++
@@ -560,12 +498,7 @@ private class Laid(
         return (sa[lo] + (r - ss[lo] - shift)).coerceAtLeast(0)
     }
 
-    /**
-     * 第一个位置 ≥ [r] 的空行下标（[gaps] 是递增的，二分）。
-     *
-     * 不二分也能跑，代价是每次切页都从第一条空行数到这一页 —— 一章五十万字、
-     * 一万七千条空行的时候，切一页要几百次这种扫描，翻页就会一顿一顿的。
-     */
+    /** 第一个位置 ≥ [r] 的空行下标（[gaps] 是递增的，二分）。 */
     private fun gapFrom(r: Int): Int {
         var lo = 0
         var hi = gaps.size
@@ -576,34 +509,18 @@ private class Laid(
         return lo
     }
 
-    /**
-     * 切出 [from, to) 这一段，连样式一起带上。
-     *
-     * 只重建这一段，不碰整章 —— 这正是「五十万字一章也不卡」的来由。
-     * 尾部的换行掐掉：带着它，画的时候会在末尾多排一条空行。
-     */
+    /** 切出 [from, to) 这一段，连样式一起带上。 */
     fun slice(from: Int, to: Int): AnnotatedString {
         var s0 = from.coerceIn(0, sb.length)
         var s1 = to.coerceIn(s0, sb.length)
         while (s1 > s0 && sb[s1 - 1] == '\n') s1--
-        /*
-         * 尾巴上正好是一条段间空行时，整条掐掉。
-         *
-         * 只掐 '\n' 的话会剩下一个零宽字符，它自成一段、还带着段间距的行高 ——
-         * 页底就凭空多出半截空白，下一页又没有。
-         */
+        /* 尾巴上正好是一条段间空行时，整条掐掉。 */
         if (s1 - 2 >= s0 && sb[s1 - 1] == GAP && sb[s1 - 2] == '\n') s1 -= 2
         if (s1 <= s0) return AnnotatedString("")
         val sub = sb.substring(s0, s1)
         return buildAnnotatedString {
             append(sub)
-            /*
-             * 段间距写在这几条空行自己的段落样式上。
-             *
-             * 一份样式只管这一段：正文其他行的行距还是 bodyStyle 那个数。
-             * Trim.None 是必须的 —— 去掉它，安卓会把空行上下裁一刀，量出来 28、
-             * 画出来 20，切页按量出来的算，页尾就会漏半行。
-             */
+            /* 段间距写在这几条空行自己的段落样式上。 */
             val gs = ParagraphStyle(
                 lineHeight = gapLineSp.sp,
                 lineHeightStyle = LineHeightStyle(
@@ -613,23 +530,10 @@ private class Laid(
             var gi = gapFrom(s0)
             while (gi < gaps.size && gaps[gi] < s1) {
                 val g = gaps[gi] - s0
-                /*
-                 * 样式必须**连后面那个换行一起**盖住。
-                 *
-                 * 只盖那个零宽字符的话，它后面那个 '\n' 是另一段：那一段空着，
-                 * 用的是正文行距 —— 于是每一对段落之间固定多出一整行，
-                 * 滑块拖到哪儿都只是在这整行之上加减几个像素，看着就是「调了没用」。
-                 * 两段都盖上半高，加起来正好是这一格填的数。
-                 */
+                /* 样式必须连后面那个换行一起盖住。 */
                 val e = (g + 2).coerceAtMost(s1 - s0)
                 if (e > g) {
-                    /*
-                     * 这个零宽字符自己必须**极小**。
-                     *
-                     * 一行的高度先由这一行里最高的那个字定：给它 19sp 的字号，
-                     * 这一行最少也有一个字高（约 22sp），段落样式里写多少都不管用。
-                     * 字号压到 1sp，这一行就只剩段落样式里那个行高说了算。
-                     */
+                    /* 这个零宽字符自己必须极小。一行的高度先由这一行里最高的那个字定：给它 19sp 的字号，这一行最少也有一个字高（约 22sp）。 */
                     addStyle(SpanStyle(fontSize = 1.sp), g, e)
                     addStyle(gs, g, e)
                 }
@@ -644,10 +548,7 @@ private class Laid(
                     0, hEnd,
                 )
             }
-            /*
-             * 签子要一眼看得见：0.78 倍、加粗、满朱色。
-             * 上一版 0.62 倍还压暗，缩在正文里几乎认不出来。
-             */
+            /* 签子要一眼看得见：0.78 倍、加粗、满朱色。 */
             val c = if (tagColor == Color.Unspecified) Color(0xFF8C3A2E) else tagColor
             /* 「未识别出」压淡一档：它是一个待办，不该跟真的名字一样抢眼。 */
             val mute = c.copy(alpha = 0.48f)
@@ -676,18 +577,11 @@ private const val INDENT = "\u3000\u3000"
 
 /**
  * 段与段之间那条空行里放的字符。
- *
  * 零宽，画不出来，只用来把这一行单独立成一段 —— 段间距就写在这一段自己的行高上。
- * 为什么不靠行距：一行的高度由整段的 lineHeight 说了算，段间距要单独一格，
- * 只能让它自成一段。
  */
 private const val GAP = '\u200B'
 
-/**
- * 开着「标出谁在说话」、可这一句没认出人来时，挂的那个签。
- *
- * 不写空：空的签画不出来，用户看到的就是「这里有对白，什么都没有」。
- */
+/** 开着「标出谁在说话」、可这一句没认出人来时，挂的那个签。 */
 private const val UNKNOWN = "未识别出"
 
 /** 「读的时候标出谁在说话」那一遍最多算这么多字。理由同上。 */
@@ -699,12 +593,7 @@ private const val FIRST = 6
 /** 一次接着切几页。翻到倒数第二页就补，手感上看不出来。 */
 private const val MORE = 8
 
-/**
- * 排一小块（滚动那一档专用）。
- *
- * 传进来的是**段索引**区间：滚动那一档本来就是一段一段画的，一块几百字，
- * 排完就画，不存在「整章」。左右翻那条路不走它。
- */
+/** 排一小块（滚动那一档专用）。 */
 private fun buildLaid(
     a: Atlas,
     from: Int,
@@ -718,13 +607,7 @@ private fun buildLaid(
     return one
 }
 
-/**
- * 一页：排好的那串字里，从哪到哪，一共几行。
- *
- * `lines` 是切页时**自己量出来的行数**。画的时候按它限住 ——
- * 少了它，画出来的排版只要跟量出来的差一点点，最后那一行就会在
- * 页脚上面露出小半个字身：既没画全，下一页又没有它。
- */
+/** 一页：排好的那串字里，从哪到哪，一共几行。 */
 private class Pg(val start: Int, val end: Int, val lines: Int = 0)
 
 /** 一屏要画的东西：哪一章、排好的那一章、哪一页、第几页共几页。 */
@@ -738,30 +621,13 @@ private data class View(
 
 /**
  * 把一章切成一页一页。每页都拿自己那一段文字量一次，不用「整章量完再按行号切」。
- *
- * 为什么不能按行号切：量整章和只画其中一段，断行会差一行。段落缩进、
- * 行尾换行、章名那行的 1.34 倍字号，都会让同一段字在两边排得不一样。
- * 差一行，页尾就多画出半行，被裁掉；下一页接着往下排，那个字就没了。
- *
- * 切的时候顺手记下这一页放了几行（[Pg.lines]），[TextBlock] 画的时候拿它当
- * `maxLines`。量和画用的是同一次结果。
+ * 为什么不能按行号切：量整章和只画其中一段，断行会差一行。
  */
-/**
- * 真正拿去画的那串字：掐掉页尾的换行。
- *
- * 带一个尾换行，[BasicText] 会在末尾多排一条空行出来 —— 那条空行占一行高，
- * 页尾就多出半个字身的位置，或者干脆把最后一行挤到 `maxLines` 之外、直接抹掉。
- * 量的时候带着它、画的时候也带着它，两边一起错，看着就像「这一页排得下但其实排不下」。
- */
+/** 真正拿去画的那串字：掐掉页尾的换行。 */
 private fun pageBody(loom: Laid, from: Int, to: Int): AnnotatedString = loom.slice(from, to)
 
 /**
  * 接着往下切页。
- *
- * 为什么能「接着」：一章可能五十万字（有人把整本当一章切），一次切完要好几百次
- * 排版量算，全在主线程上，点开就是几秒钟不动 —— 用户说的「卡死」就是它。
- * 现在先切够看得见的那几页，往后翻一页再切一页；[out] 一直往下长。
- *
  * @param from0  从这串字里的哪个位置接着切（第一次传 0）
  * @param maxNew 这一趟最多再切几页
  * @return 下一次该从哪儿接着切；等于 text.length 就是切完了
@@ -831,24 +697,13 @@ private fun splitInto(
             }
             if (use < 0) use = 0
 
-            /*
-             * 落点取第 use 行的**可见**行尾：`visibleEnd = true` 把行尾的换行和空白掐掉。
-             * 不掐的话那个换行会跟着这一页走，画的时候末尾多一条空行，
-             * 整页字往下挪一行 —— 页脚上吊着的那半个字就是它。
-             */
+            /* 落点取第 use 行的可见行尾：visibleEnd = true 把行尾的换行和空白掐掉。 */
             var e = from + lay.getLineEnd(use, visibleEnd = true)
             if (e <= from) e = (from + 1).coerceAtMost(total2)
 
             /*
              * 落到「真正要画的那串字」自己的排版上。
-             *
-             * 量前缀和量这一段，断行并不一样（行尾标点能不能落到下一行、段落缩进、
-             * 章名那行 1.34 倍字号）。所以不能拿前缀的第 use 行去当结论。
-             *
-             * 做法是一步步收敛：先按前缀给一个落点，再拿这段字自己量一遍，
-             * 用它自己的「最后一条放得下的行」重新定落点，直到它自己说「全都放得下」。
-             * 每轮只会往前走，最多三四轮就一定停 —— 不会像「一行一行往回退」那样
-             * 退过头，把一页退成半页。
+             * 所以不能拿前缀的第 use 行去当结论。
              */
             var guard = 0
             while (guard++ < 6) {
@@ -886,14 +741,7 @@ private fun splitInto(
     return from
 }
 
-/**
- * 排好的章留着，换章 / 翻回来都不再重量一遍。
- *
- * 一章两个东西：排版结果（含段映射）和切好的页。两个都缓存，
- * 所以左右翻到边界那一刻，邻章的下一页早就在手上了，不用当场量。
- *
- * 只留最近十来章，书再厚也不会把内存吃穿。
- */
+/** 排好的章留着，换章 / 翻回来都不再重量一遍。 */
 private class ChapterCache(
     private val a: Atlas,
     private val style: TextStyle,
@@ -905,13 +753,7 @@ private class ChapterCache(
 ) {
     private val lays = LinkedHashMap<Int, Laid>()
 
-    /**
-     * 已经切出来的页。**会长**，不是一次切完。
-     *
-     * 见 [splitInto]：五十万字一章一次切完要几百次排版量算，全在主线程，
-     * 点开就是几秒钟不动 —— 用户说的「卡死」就是它。现在先切够眼前这几页，
-     * 往后翻再接着切。
-     */
+    /** 已经切出来的页。会长，不是一次切完。 */
     private val pgs = LinkedHashMap<Int, ArrayList<Pg>>()
     /** 这一章的页已经切到章尾。 */
     private val done = HashSet<Int>()
@@ -922,25 +764,11 @@ private class ChapterCache(
     var ver by mutableIntStateOf(0)
         private set
 
-    /**
-     * 名字签：**按章取**。
-     *
-     * 为什么要按章：上下滚那一档，一屏上下跨着好几章。以前只算当前这一章，
-     * 滚到下一章就一个签都没有 —— 用户说的「滑到下一章就完全不会自动标出来」。
-     * 现在每一章排的时候各自问一次。
-     *
-     * 换一次（或者这一章刚算出来）就把排好的全丢掉：签子插在正文中间，
-     * 一个字不同，整章的断行、页数、页码全变，留着旧的只会让页码和画面打架。
-     */
+    /** 名字签：按章取。为什么要按章：上下滚那一档，一屏上下跨着好几章。 */
     var marksOf: ((Int) -> java.util.SortedMap<Int, String>?)? = null
         private set
 
-    /**
-     * 设一次签子来源。
-     *
-     * [sig] 是这个闭包的「第几版」（算完一章、开关换了都会变）。同一个 sig 反复设
-     * 不算变化 —— 每帧都设一次会把缓存每帧清一次，页面就一直重排。
-     */
+    /** 设一次签子来源。[sig] 是这个闭包的「第几版」（算完一章、开关换了都会变）。 */
     fun tags(sig: Int, f: ((Int) -> java.util.SortedMap<Int, String>?)?) {
         if (tagSig == sig && markSet) return
         tagSig = sig
@@ -996,11 +824,7 @@ private class ChapterCache(
     /** 这一章切到章尾了没有。 */
     fun allPages(ch: Int): Boolean = ch in done
 
-    /**
-     * 把这一章切到章尾。只在「退到上一章最后一页」这种一次性动作里用。
-     *
-     * 五十万字一章会在这里排上几秒 —— 但它只在按「上一章」、而且上一章特别长时发生一次。
-     */
+    /** 把这一章切到章尾。只在「退到上一章最后一页」这种一次性动作里用。 */
     fun ensureAll(ch: Int) {
         val loom = laid(ch)
         loom.growAll()
@@ -1008,12 +832,7 @@ private class ChapterCache(
         while (ch !in done && guard++ < 4000) grow(ch, (pgs[ch]?.size ?: 0) + MORE)
     }
 
-    /**
-     * 这一章「排好的那串字」里某个位置落在第几页。
-     *
-     * 续着切，切到它为止 —— 恢复上次读到哪儿要用它。五十万字一章要切到很后面
-     * 才停，但那是「上一次真的读到那么后面」，只发生一次。
-     */
+    /** 这一章「排好的那串字」里某个位置落在第几页。 */
     fun pageOf(ch: Int, absInLaid: Int): Int {
         var guard = 0
         while (ch !in done && guard++ < 80) {
@@ -1114,10 +933,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     var castOpen by remember { mutableStateOf(false) }
     /** 点开的那个名字签（那一段的全书偏移）。null = 没开。 */
     var whoAbs by remember { mutableStateOf<Int?>(null) }
-    /*
-     * 顶上那条横幅点进来的：这一页要把派角纸撑开。
-     * 只认一次，认得之后立刻收旗，免得退出去再进来又弹一遍。
-     */
+    /* 顶上那条横幅点进来的：这一页要把派角纸撑开。 */
     LaunchedEffect(com.pagefold.reader.voice.AiJob.wantCast) {
         if (com.pagefold.reader.voice.AiJob.wantCast) {
             com.pagefold.reader.voice.AiJob.wantCast = false
@@ -1144,60 +960,22 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     // 最近一次滑动结束的时刻。「滑一下顺手把控制条带出来」就是没有这一格的后果。
     var scrollAt by remember { mutableLongStateOf(0L) }
     // 点空白收选区的那一刻记下来。同一次抬手不要再干第二件事（比如把听书台弹出来），
-    // 否则「想收选区」会变成「收选区 + 弹面板」，看着就是没听手。
+    // 否则收选区会连带把面板弹出来。
     var shutAt by remember { mutableLongStateOf(0L) }
-    /*
-     * 最近一次翻页的时刻。
-     *
-     * 翻页那一下的抬手不该再被判成「点了一下空白」—— 判成了，底下的听书台就弹出来，
-     * 看着就是「翻一下就跳出控制栏」。旁边那两个（滑完、收完选区）是同一类闸门，
-     * 这一格是给左右翻补的。
-     */
+    /* 最近一次翻页的时刻。翻页的抬手不算「点了空白」，否则听书台会跟着弹出来。 */
     var flipAt by remember { mutableLongStateOf(0L) }
 
-    /*
-     * 块号 → 这一块排好的字 + 它的排版结果。
-     *
-     * 跟读要「滚到正在念的那一行」，就得知道那一行在块里离顶多少像素。
-     * 只有块被画出来之后才有 TextLayoutResult，所以画的时候顺手记一笔；
-     * 没画过的块先滚过去让它画出来，下一帧再精确对位。
-     */
+    /* 块号 → 这一块排好的字 + 它的排版结果。 */
     val laidMap = remember { HashMap<Int, Pair<Laid, TextLayoutResult>>() }
     // 我们自己发起的滚动，别当成用户手动划走。
     var autoScroll by remember { mutableStateOf(false) }
-    /*
-     * 刚按下的那一会儿。
-     *
-     * SelectionContainer 在选词落定的瞬间会发一次 bring-into-view，让「选中的那几个字」可见。
-     * 我们的一块（1400 字 / 20 段）比一屏高，LazyColumn 没法让它整块可见，
-     * 就去把**块的边**对齐视口 —— 手刚按下去，屏幕自己往上或往下蹿一下。
-     * 这是「明明选的是中间，却跑到上面或下面」的真正原因。
-     *
-     * 所以按下后 800ms 内，把那条请求夹回「已经可见」的范围里，等于什么也不做；
-     * 过了这段时间（手指还在拖手柄）就放行，手柄拖到屏幕边缘照常继续滚。
-     */
+    /* 刚按下的那一会儿。SelectionContainer 在选词落定的瞬间会发一次 bring-into-view，让「选中的那几个字」可见。 */
     var pressedAt by remember { mutableLongStateOf(0L) }
-    /*
-     * 选词落定那一下，LazyColumn 会收到一次 bring-into-view。
-     *
-     * 我们一块（1400 字 / 20 段）比一屏高，LazyColumn 没法让它整块可见，
-     * 就去把**块的边**对齐视口 —— 手刚按下去，屏幕自己往上或往下蹿一下。
-     * 这就是「明明选的是中间，却跑到上面或下面」。
-     *
-     * 不去碰 SelectionContainer 内部：按下的瞬间记下滚动位置，
-     * 半秒内只要位置被推走了，就原样拉回来。之后手指拖手柄到边缘照常继续滚。
-     */
+    /* 选词落定那一下，LazyColumn 会收到一次 bring-into-view。 */
     var guardAt by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     /*
      * 手指/选择手柄压在屏幕上下边缘时，持续往那个方向滚。
-     *
-     * 为什么必须有这一段：我们一块（1400 字 / 20 段）比一屏高，LazyColumn 的
-     * bring-into-view 只会把「块的边」对齐视口 —— 块已经露出来一角就算数，
-     * 于是拖着手柄往下一路选，滚到某处就停住，再也下不去。
      * 「选字时不能一直往下拖」就是这个。
-     *
-     * 这里不看是谁在拖：只要有一个手指按着、且压在边缘带里，就按距离给速度。
-     * 自己拖手柄、拖动选区、甚至普通滑动，都照常。
      */
     val barPush = remember { mutableFloatStateOf(0f) }
     var listTop by remember { mutableFloatStateOf(0f) }
@@ -1219,13 +997,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     }
 
     var sleepLeft by remember { mutableIntStateOf(Sleep.leftSec()) }
-    /*
-     * 这一本的念速从它自己的档案里读回来。
-     *
-     * 从 0 起的话，每次进书都当成「没设过」，退回全局那一档 ——
-     * 书里调到 125，当场生效，退出再进就变回原速，看着像根本没存。
-     * 存的 BookMeta.rate 一直是好的，只是没人读它。
-     */
+    /* 这一本的念速从它自己的档案里读回来。 */
     var bookRate by remember(book.id) {
         mutableIntStateOf(bookNow.rate.takeIf { it in 50..300 } ?: 0)
     }
@@ -1240,14 +1012,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     val bar = remember { BookBar2() }
     val list = rememberLazyListState()
 
-    /*
-     * 选区拖到屏幕上下边缘，就持续往那边滚。
-     *
-     * 看的是选区矩形，不是手指。选择手柄画在另一个窗口（Popup）里，
-     * 手指的移动不会经过这一层的 pointerInput。
-     * SelectionContainer 每次选区变化都会回调 showMenu(rect)，矩形跟着手柄走：
-     * 贴着下边就往下滚，贴着上边就往上滚。
-     */
+    /* 选区拖到屏幕上下边缘，就持续往那边滚。 */
     LaunchedEffect(list, bar.state) {
         while (isActive) {
             if (bar.state != TextToolbarStatus.Shown) { barPush.floatValue = 0f; delay(60); continue }
@@ -1279,12 +1044,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         }
     }
 
-    /*
-     * 什么才算「点了一下空白」。三条一起看，缺一条不算：
-     * 手没在滑；刚滑完 260ms 内不算；没在收着选区。
-     *
-     * 少了后两条，往下滑的抬手也会被当成点击，控制条自己蹦出来。
-     */
+    /* 什么才算「点了一下空白」。三条一起看，缺一条不算：手没在滑；刚滑完 260ms 内不算；没在收着选区。 */
     val canTap: () -> Boolean = {
         val now = System.currentTimeMillis()
         now - shutAt > 350 &&
@@ -1306,12 +1066,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         app.shelf.touch(book.id, c, off, abs.toFloat() / a.text.length.coerceAtLeast(1))
     }
 
-    /*
-     * 听书时的进度：手动节流 3 秒一次，换章立即写。
-     *
-     * 不用 delay+collectLatest：那样一直念下去就永远不写。
-     * 也不用 sample：换章那一下要立刻落，等 3 秒就可能漏掉一章。
-     */
+    /* 听书时的进度：手动节流 3 秒一次，换章立即写。 */
     LaunchedEffect(playing, atlas) {
         val a = atlas ?: return@LaunchedEffect
         if (!playing) {
@@ -1364,12 +1119,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     }
     val rate = if (bookRate in 50..300) bookRate else settings.rate
 
-    /*
-     * 正文版式一律取 effNow（定音为底，叠上这本书自己那几格），不取 settings。
-     *
-     * 取 settings 的话，「这一本怎么读」里改字号、行距、留白、翻法全都落不了地：
-     * 值存进了 tuneJson，朗读也用上了，屏幕却不动。看起来就是「书里改没用」。
-     */
+    /* 正文版式一律取 effNow（定音为底，叠上这本书自己那几格），不取 settings。 */
     val bodyStyle = remember(effNow.fontSize, effNow.lineGap, s.ink, s.titleFont) {
         TextStyle(
             fontSize = effNow.fontSize.sp,
@@ -1379,15 +1129,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         )
     }
 
-    /*
-     * 这一句是谁在说话。只有开了那个开关才算。
-     *
-     * 算的是**整章的对白归属**（跟播放器同一个算法），一句一个签，
-     * 落在这句引号前面。一段里两个人说话就两个签 —— 点哪个改哪个。
-     *
-     * 结果**按章存**：上下滚那一档一屏跨几章，滚到下一章要有签。
-     * 一次算当前这一章和前后各一章，翻过去时手上已经是热的。
-     */
+    /* 这一句是谁在说话。开关在派角页，只算对白那一句。 */
     val cbMark = remember(bookNow.castJson, settings.castJson) {
         runCatching {
             com.pagefold.reader.book.RuleCodec
@@ -1395,82 +1137,69 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         }.getOrDefault(com.pagefold.reader.book.CastBook())
     }
     val markOn = cbMark.mark
-    /* 章号 → 这一章每一句归谁。改过角色、换了章就重算。 */
-    val markMap = remember(bookNow.castJson, castVer, markOn) {
-        java.util.concurrent.ConcurrentHashMap<Int, java.util.SortedMap<Int, String>>()
+    /* 书 + 角色表 = 一份账。 */
+    val castKey = remember(bookNow.castJson, settings.castJson) {
+        (bookNow.castJson.ifBlank { settings.castJson }).hashCode().toString(16)
     }
-    /* 正在算第几章。避免同一章算两遍。 */
-    val markBusy = remember(bookNow.castJson, castVer, markOn) {
-        java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
+    var castKeySeen by remember(book.id) { mutableStateOf(castKey) }
+    LaunchedEffect(castKey, book.id) {
+        if (castKeySeen != castKey) {
+            castKeySeen = castKey
+            com.pagefold.reader.book.Marks.dropBook(book.id)
+        }
     }
-    var markTick by remember(bookNow.castJson, castVer, markOn) { mutableIntStateOf(0) }
+    val markTick = com.pagefold.reader.book.Marks.tick()
+    fun tagOf(k: Int): java.util.SortedMap<Int, String>? =
+        if (markOn) com.pagefold.reader.book.Marks.get(com.pagefold.reader.book.Marks.key(book.id, castKey, k))
+        else null
 
-    /*
-     * 滚动那一档当前看的是哪一章。它跟 ch 不一定同步（ch 也是滚出来的），
-     * 但算签的优先级按它来更准 —— 用户在读的那一章先算，别算到两章之外。
-     */
+    /* 滚动那一档当前看的是哪一章。算签的优先级按它来，先算眼前这一章。 */
     var seenCh by remember { mutableIntStateOf(0) }
-    /*
-     * `chapters` 必须进 key。
-     *
-     * 上一版没有它：进书那一刻 `full` 先到、`chapters` 还是空的，这一遍一章都算不了
-     * （`k !in chapters.indices` 全被跳过）；而它是个协程，读到空表**不会**被重新触发。
-     * 于是「明明开着标出谁在说话，签子就是不出现」—— 直到去派角转一圈，
-     * `castVer` 一变这个 effect 才重跑，那时 chapters 已经有了。（用户报的就是这个。）
-     */
-    LaunchedEffect(ch, bookNow.castJson, castVer, markOn, full, chapters, seenCh) {
+    /* 当前章 + 前后各一章。chapters 必须在 key 里：进书那一刻 full 先到、chapters 还空着，那一遍一章都算不了。 */
+    LaunchedEffect(ch, full, chapters, seenCh, markOn, castKey) {
         if (!markOn) return@LaunchedEffect
         val t = full ?: return@LaunchedEffect
         val cb = cbMark
-        /* 眼前这几章先算：正在读的、前后各一。 */
         val order = intArrayOf(seenCh, ch, ch + 1, ch - 1, ch + 2)
         for (k in order) {
             if (k !in chapters.indices) continue
-            if (markMap.containsKey(k) || markBusy.putIfAbsent(k, true) != null) continue
+            val mk = com.pagefold.reader.book.Marks.key(book.id, castKey, k)
+            if (com.pagefold.reader.book.Marks.get(mk) != null) continue
+            if (!com.pagefold.reader.book.Marks.claim(mk)) continue
             val c = chapters[k]
-            val body = withContext(Dispatchers.Default) {
-                runCatching {
-                    val s0 = c.start.coerceIn(0, t.length)
-                    val s1 = minOf(c.end.coerceIn(0, t.length), s0 + MARK_CAP)
-                    if (s1 <= s0) return@runCatching java.util.TreeMap<Int, String>()
-                    val cut = t.substring(s0, s1)
-                    val out = java.util.TreeMap<Int, String>()
-                    val pins = cb.pins.filter { it.ch == k }.associate { it.at to it.who }
-                    com.pagefold.reader.book.Cast.plan(cut, profileOf(app, bookNow, effNow), 0, pins)
-                        .filter { it.isDialog }
-                        .forEach { ln ->
-                            if (ln.srcStart !in cut.indices) return@forEach
-                            /*
-                             * 键是**全书偏移**。
-                             *
-                             * [buildLaid] 拿段落起点（全书偏移）去 subMap 里取签，
-                             * 上回存的是章内偏移，两边差着一个 c.start ——
-                             * 签子于是插进了句子中间（「正午，街口的沈泊·电线杆下」）。
-                             */
-                            val who = cb.pinAt(k, ln.srcStart)?.who ?: ln.speaker
-                            /*
-                             * 认不出来的也要挂一个签。
-                             *
-                             * 用户开了「读的时候标出谁在说话」，引号里明明有人说话，
-                             * 却一个标都没有 —— 他不知道是「没人说话」还是「没认出来」，
-                             * 也就没法改。挂「未识别出」，点它就能指给谁。
-                             */
-                            out[s0 + ln.srcStart] = if (who.isBlank()) UNKNOWN else who
+            val body = try {
+                withContext(Dispatchers.Default) {
+                    runCatching {
+                        val s0 = c.start.coerceIn(0, t.length)
+                        val s1 = minOf(c.end.coerceIn(0, t.length), s0 + MARK_CAP)
+                        val out = java.util.TreeMap<Int, String>()
+                        if (s1 > s0) {
+                            val cut = t.substring(s0, s1)
+                            val pins = cb.pins.filter { it.ch == k }.associate { it.at to it.who }
+                            com.pagefold.reader.book.Cast.plan(cut, profileOf(app, bookNow, effNow), 0, pins)
+                                .filter { it.isDialog }
+                                .forEach { ln ->
+                                    if (ln.srcStart !in cut.indices) return@forEach
+                                    /* 键是全书偏移，跟 Laid 取签用的是同一把尺子。 */
+                                    val who = cb.pinAt(k, ln.srcStart)?.who ?: ln.speaker
+                                    /* 认不出来也挂一个，点它就能指给谁。 */
+                                    out[s0 + ln.srcStart] = if (who.isBlank()) UNKNOWN else who
+                                }
                         }
-                    out
-                }.getOrDefault(java.util.TreeMap())
+                        out
+                    }.getOrDefault(java.util.TreeMap())
+                }
+            } finally {
+                /* 被取消也得摘记号，否则这一章在这个进程里再也不会算。 */
+                com.pagefold.reader.book.Marks.yield(mk)
             }
-            markMap[k] = body
-            markBusy.remove(k)
-            markTick++
-            cacheRef?.dropAll()
+            /* 取消时不落账：落一个空表等于给这一章盖上「没人说话」的章。 */
+            currentCoroutineContext().ensureActive()
+            com.pagefold.reader.book.Marks.put(mk, body)
         }
     }
 
-    /*
-     * 点名字签要开的那张纸上，得知道「这一句现在归谁」。
-     * 直接查那份按章存好的表 —— 章一定算过了，因为签是从它画出来的。
-     */
+    /* 点名字签要开的那张纸上，得知道「这一句现在归谁」。 */
     fun whoAt(abs: Int): String? {
         var lo = 0
         var hi = chapters.size - 1
@@ -1478,7 +1207,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
             val m = (lo + hi + 1) / 2
             if (chapters[m].start <= abs) lo = m else hi = m - 1
         }
-        return markMap[lo]?.get(abs)
+        return tagOf(lo)?.get(abs)
     }
 
     val feed = remember(full, chapters, bookNow.castJson, castVer, settings.castJson, settings.rulesJson, effNow.chunkChars) {
@@ -1497,12 +1226,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         t.substring(c.start.coerceIn(0, t.length), c.end.coerceIn(0, t.length))
                     val ls = if (text.isBlank()) emptyList() else
                         withContext(Dispatchers.Default) {
-                            /*
-                             * 单句改派要跟着念的那条路走。
-                             *
-                             * 只画在签子上、不交给 plan 的话，用户改完一句，
-                             * 屏幕上写着新人，念出来还是原来那个嗓子。
-                             */
+                            /* 单句改派要跟着念的那条路走。 */
                             val pins = cbMark.pins.filter { it.ch == i }.associate { it.at to it.who }
                             Cast.plan(text, p, chunk, pins)
                         }
@@ -1511,12 +1235,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     ls
                 }
             },
-            /*
-             * 进度写在这里，不写在界面上。
-             *
-             * 声音是后台念的，界面随时可能被回收；睡眠定时也是后台到点停的。
-             * 这个 lambda 跟着 Feed 一起被播放器持有，播放器活着它就活着。
-             */
+            /* 进度写在这里，不写在界面上。 */
             onPos = { c, off ->
                 val base = chapters.getOrNull(c)?.start ?: 0
                 val abs = (base + off).coerceIn(0, t.length.coerceAtLeast(0))
@@ -1621,16 +1340,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         armed = true
     }
 
-    /*
-     * 换翻法：左右翻 ↔ 上下滚。
-     *
-     * 两套视图各记各的位置，切过去等于从头来：上下滚从第一块铺起，左右翻从第一章翻起。
-     * 所以切之前先取「现在读到哪个字」，切过去按这个字落位 ——
-     * 切到左右翻，算出它在第几章、章内第几个字，交给落位那一格；
-     * 切到上下滚，把列表滚到那个字所在的块。
-     *
-     * 首次进页面不触发：lastTurn 初值等于当前值。
-     */
+    /* 换翻法：左右翻 ↔ 上下滚。 */
     var lastTurn by remember { mutableStateOf(effNow.turn) }
     LaunchedEffect(effNow.turn) {
         if (lastTurn == effNow.turn) return@LaunchedEffect
@@ -1670,11 +1380,8 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     }
 
     /*
-     * 念到哪儿就把进度写回书架。
-     *
-     * 听书时画面是被跟读逻辑带着走的，不经过用户手势，翻页和滚动那两条路都不会触发。
-     * 这一条自己写：节流 4 秒一次，换章立即写。写的是「本章第几个字」和全书百分比，
-     * 坐标跟别处一致。
+     * 念到哪儿就把进度写回书架。听书时画面是被跟读逻辑带着走的，不经过用户手势，翻页和滚动那两条路都不会触发。
+     * 写的是「本章第几个字」和全书百分比，坐标跟别处一致。
      */
     val chapterTitle = chapters.getOrNull(ch)?.title ?: book.title
     val leftCh = (chapters.size - ch - 1).coerceAtLeast(0)
@@ -1697,37 +1404,24 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         }
     }
 
-    Box(Modifier.fillMaxSize().background(s.ground)) {
+    /* 铺不铺这一层纸色。阅读这一页挑了图的时候，图是 Root 那层 BgLayer 画的，在这一层下面。 */
+    val hasOwnBg = remember(settings.bgJson, settings.shelfBg) {
+        com.pagefold.reader.field.BgSpec.decode(settings.bg("reader")) != null
+    }
+    Box(
+        Modifier.fillMaxSize().then(
+            if (hasOwnBg) Modifier else Modifier.background(s.ground)
+        )
+    ) {
         CompositionLocalProvider(LocalTextToolbar provides bar) {
             BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 val padH = effNow.padH.dp
                 val density = LocalDensity.current
-                /*
-                 * 宽度和高度都直接从**约束的像素值**来，不经 Dp 来回换算。
-                 *
-                 * 以前是 (maxWidth − padH*2).roundToPx()：Dp 减 Dp、再取整。
-                 * 布局那边是「左边取整一次、右边取整一次、两者相减」。
-                 * 密度 2.75 时这两种算法差 1px 以上。差 1px 的后果不是「窄一点」——
-                 * 是某一个字本来该落在这一行，被挤到下一行，整页多一行；
-                 * 画的时候 maxLines 收着，最后那一行被直接抹掉：这页看不见它，下一页又不收它。
-                 *
-                 * constraints.maxWidth / maxHeight 是这一层的真实像素，减掉和布局同一套
-                 * roundToPx 的内边距，剩下的就是正文真正拿到的那个框。
-                 */
+                /* 宽度和高度都直接从约束的像素值来，不经 Dp 来回换算。 */
                 val wpx = with(density) {
                     (constraints.maxWidth - padH.roundToPx() * 2).coerceAtLeast(1)
                 }
-                /*
-                 * 正文可用高度，按**逐边取整**算，跟布局走同一条路。
-                 *
-                 * 以前写的是「(maxHeight − 42dp).roundToPx()」：先把两个内边距合成一个数再取整，
-                 * 和布局那边「上边取整一次、下边取整一次、两者相减」不是一个结果 ——
-                 * density 不是整数时能差好几个像素。差一行不到，但那一行就是压在页脚上、
-                 * 下一页又不收的那一行。
-                 *
-                 * 现在逐边取整，跟 Box 的 padding 用的是同一个函数、同一个密度，算出来就是布局用的那个数。
-                 * 再让掉 1dp：亚像素那种差半格的情况不该由用户来发现。
-                 */
+                /* 正文可用高度，按逐边取整算，跟布局走同一条路。 */
                 val hpx = with(density) {
                     val padTopPx = 14.dp.roundToPx()
                     val padBottomPx = 26.dp.roundToPx()
@@ -1742,26 +1436,16 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     remember(at, sig) { ChapterCache(at, bodyStyle, wpx, hpx, measurer, effNow.paraGap) }
                 }
                 cache?.let { c ->
-                    /*
-                     * 按章取签。markTick 变了（新算出一章）就整块重排一次 ——
-                     * 签子插在正文里，字一变，断行和页码都跟着变。
-                     */
+                    /* 签子插在正文里，算出一章字就变，断行和页码跟着变，整块重排。 */
                     c.tags(
                         sig = if (markOn) markTick + 1 else 0,
-                        f = if (markOn) ({ k: Int -> markMap[k] }) else null,
+                        f = if (markOn) ({ k: Int -> tagOf(k) }) else null,
                     )
                     if (c.tagColor != s.flame) c.tagColor = s.flame.copy(alpha = 0.85f)
                 }
                 // 底下的控制条也要按页走，所以把这份排好的页露出去。
                 LaunchedEffect(cache) { cacheRef = cache }
-                /*
-                 * 铺纸：先眼前这一屏，再往后一页一页备。
-                 *
-                 * 一章可能五十万字（有人整本切成一两章）。一上来就把整章切完，
-                 * 主线程要量几百次，点开几秒钟不动 —— 用户说的「直接卡死」。
-                 * 所以这里只保证「当前页 + 往后两页」，剩下的等翻到再切；
-                 * 每备一页让出一帧，手感上是「翻过去就已经在了」。
-                 */
+                /* 铺纸：先眼前这一屏，再往后一页一页备。 */
                 LaunchedEffect(cache, ch, chapters.size) {
                     cache?.warmOne(ch)
                     withFrameNanos { }
@@ -1790,13 +1474,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
 
                         LaunchedEffect(pagesNow.size) { pageCount = pagesNow.size.coerceAtLeast(1) }
 
-                        /*
-                         * 快翻到底了就把后面几页切出来。
-                         *
-                         * 页是接着切的（见 [splitInto]），一本五十万字一章的书
-                         * 才不会一开就往主线程上堆几百次量算。留三页余量，
-                         * 手指翻到的那一页永远已经在了。
-                         */
+                        /* 快翻到底了就把后面几页切出来。 */
                         LaunchedEffect(ch, page, pagesNow.size) {
                             cache.ensure(ch, page + 3)
                         }
@@ -1806,13 +1484,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                             val at = restoreAt
                             if (at < 0) return@LaunchedEffect
                             val abs = a.chStart.getOrElse(ch) { 0 } + at
-                            /*
-                             * 落到哪一页由排版位置说了算，且**接着往下切**。
-                             *
-                             * 上一版只在「已经切出来的那几页」里找，一本五十万字
-                             * 一章的书存到第 300 页，回来只会落到第 6 页 —— 看着像
-                             * 「上次读到哪儿它不记得」。
-                             */
+                            /* 落到哪一页由排版位置说了算，且接着往下切。 */
                             val i = cache.pageOf(ch, laidNow.rendered(abs))
                             restoreAt = -1
                             page = i
@@ -1869,13 +1541,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                             } else {
                                 if (page > 0) page -= 1
                                 else if (ch > 0) {
-                                    /*
-                                     * 退到上一章的**最后一页**。
-                                     *
-                                     * 页是接着切的，上一章现在手上可能只有头几页 ——
-                                     * 不能拿 pages().size 当总数，那会退到第 6 页。
-                                     * 让它一直切到章尾，再取最后一页。
-                                     */
+                                    /* 退到上一章的最后一页。页是接着切的，上一章现在手上可能只有头几页 ——不能拿 pages().size 当总数，那会退到第 6 页。 */
                                     cache.ensureAll(ch - 1)
                                     val n = cache.pages(ch - 1).size
                                     ch -= 1
@@ -1888,16 +1554,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         // 手感上就是「这块卡住了」。索性不收这个手势。
                         Box(
                             Modifier.fillMaxSize()
-                                /*
-                                 * 左右翻：最外层自己接一道手势，抬手时判定。
-                                 *
-                                 * 走 Initial 阶段，外部节点先于内部拿到事件。正文里的
-                                 * SelectionContainer 在按下那一刻就把 down 收走了，Main 阶段
-                                 * 的拖动回调根本等不到「开始拖动」。
-                                 *
-                                 * 过程中一律不 consume，不跟选字抢；只在抬手时算总位移：
-                                 * 横向过 56dp 且明显大于纵向 1.6 倍，翻一页。
-                                 */
+                                /* 左右翻：最外层自己接一道手势，抬手时判定。 */
                                 .pointerInput(ch, pi, pagesNow.size) {
                                     val need = 56.dp.toPx()
                                     awaitPointerEventScope {
@@ -1930,10 +1587,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         ) {
                             // 底下这一层接「点空白」。字上的点击由正文自己接，不会重复。
                             Box(
-                                Modifier.fillMaxSize().clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() },
-                                ) { if (canTap()) desk = !desk }
+                                Modifier.fillMaxSize().tap { if (canTap()) desk = !desk }
                             )
 
                             // 落好位之前只画一层纸。落好了再画正文，
@@ -1958,13 +1612,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                 val ld = cache.laid(c)
                                 val idx = pgNo.coerceIn(0, (lp.size - 1).coerceAtLeast(0))
                                 val pg = lp[idx]
-                                /*
-                                 * 一页 = 正文层 + 页脚层，两层叠在一起。
-                                 *
-                                 * 页脚是 Box 的最后一个子节点，画在最上面；正文层按「让出页脚那一条」
-                                 * 的高度排版并裁切。做成 Column 的上下兄弟就不行：正文一高就把页脚顶出屏幕，
-                                 * 章首页（标题 1.34 倍字号）最容易出这种情况，那页就没有页码了。
-                                 */
+                                /* 一页 = 正文层 + 页脚层，两层叠在一起。 */
                                 Box(Modifier.fillMaxSize()) {
                                     Box(
                                         Modifier
@@ -2024,7 +1672,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                 if (pgs.isEmpty()) return@collect
                                 val ld = cache.laid(c)
                                 // 夹在这一回的正文范围里。块会跨过章尾，不夹的话
-                                // 「最后一页」会被顶成 100%，看着就是进度条自己跑到最右。
+                                // 「最后一页」会被顶成 100%，进度条自己跑到最右。
                                 // 页表里的 start 是「排好版的那串字」里的位置，不是全书位置。
                                 // 拿全书位置去跟它比，会整整错开一章的缩进和标题，页码算出来是假的。
                                 // 页码取「正在念的那一页」。取错的话条子先冲到头再弹回来。
@@ -2033,20 +1681,8 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                     .coerceIn(0, pgs.size - 1)
                             }
                         }
-                        // 念到哪，屏幕跟到哪。
-                        //
-                        // 同一页内不重启滚动动画：句子一短，动画还没走完就被新的打断。
-                        // 看着就是「它停在那儿一直念，屏幕不动」。现在一句一句排着队滚，
-                        // 手上的动画不被打断；自己正在滑的时候也不插手。
-                        /*
-                         * 把正在念的那个字摆到屏幕上。
-                         *
-                         * 算到行，不按块：块里那个字离顶多少像素，就把它放到视口 22% 处。
-                         * 按块顶对齐的话，一块几十段，刚开口时屏幕会停在正在念的那段上面好几段，
-                         * 念到块中间又回头再对一次。
-                         *
-                         * 块还没画过（没有排版结果）就先滚过去让它画，下一帧再对。
-                         */
+                        // 念到哪，屏幕跟到哪。同一页内不重启滚动动画，一句一句排着队滚。
+                        /* 把正在念的那个字摆到屏幕上。 */
                         suspend fun follow(abs: Int) {
                             val bi = a.blockOf(abs).coerceIn(0, (a.bCount - 1).coerceAtLeast(0))
                             val vh = list.layoutInfo.viewportSize.height
@@ -2076,15 +1712,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                             val yo = box?.bottom ?: 0f
 
                             /*
-                             * 目标位置不能是负数。
-                             *
-                             * animateScrollToItem(bi, 负数) 不是「滚不动」，而是「把这一块往上推」：
-                             * 这一块顶出屏幕，露出**上一块**的内容。本章第一块就是这种情况 ——
-                             * 正在念的字在块顶附近，target 算出来负四百，屏幕一路往上，
-                             * 上一章的尾巴就翻出来了。章与章之间正好在块边界上，所以「念本章头三个字，
-                             * 跳到上一章」几乎是必然。
-                             *
-                             * 夹到 0：这一块顶对齐屏幕上沿，正在念的那个字就停在它本来的位置。
+                             * 目标位置不能是负数。animateScrollToItem(bi, 负数) 不是「滚不动」，而是「把这一块往上推」：这一块顶出屏幕。
                              * 宁可让它比 target 低一点，也不能滚出这一块。
                              */
                             val target = ((y - want).toInt()).coerceIn(0, y.toInt().coerceAtLeast(0))
@@ -2110,15 +1738,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
 
                         LaunchedEffect(playing, list, bookNow.title) {
                             if (!playing) return@LaunchedEffect
-                            /*
-                             * 这一条必须「怎么着都还活着」。
-                             *
-                             * 旧写法一个 collect 到底：animateScrollToItem 被中断时会抛
-                             * （手指一碰、切后台、重建，都会），collect 一结束，这个
-                             * LaunchedEffect 的 key 又没变，就再没人重启它 ——
-                             * 表现就是「放着不动，字不跟着念了」，而且非得退出重进才好。
-                             * 现在外面套一层重来的环：出一次错，停半秒接着跟。
-                             */
+                            /* 这一条必须「怎么着都还活着」。 */
                             while (isActive) {
                                 try {
                                     snapshotFlow { Triple(ps.book, ps.chapter, ps.srcStart) }.collect { tri ->
@@ -2143,12 +1763,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         }
                         LazyColumn(
                             state = list,
-                            /*
-                             * 选字的时候照样能滚。
-                             *
-                             * 锁滚动能防选区错位，但拖手柄到屏幕边缘就选不下去了。
-                             * 这里只掐掉按住那一刻的自动对齐（见 pressedAt），滚动不拦。
-                             */
+                            /* 选字的时候照样能滚。锁滚动能防选区错位，但拖手柄到屏幕边缘就选不下去了。 */
                             modifier = Modifier
                                 .fillMaxSize()
                                 // 记下列表在窗口里的纵向起点。选区那套坐标是「窗口坐标」，
@@ -2162,7 +1777,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                 BlockText(
                                     a = a, bi = bi, style = bodyStyle,
                                     hlFrom = hlFrom, hlTo = hlTo, selKey = selKey,
-                                    tag = if (markOn) markMap[bc] else null,
+                                    tag = if (markOn) tagOf(bc) else null,
                                     tagSig = if (markOn) markTick + 1 else 0,
                                     paraGap = effNow.paraGap,
                                     onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis(); guardAt = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset },
@@ -2178,7 +1793,11 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
             }
         }
 
-        if (!settled) Box(Modifier.fillMaxSize().background(s.ground))
+        if (!settled) Box(
+            Modifier.fillMaxSize().then(
+                if (hasOwnBg) Modifier else Modifier.background(s.ground)
+            )
+        )
 
         // 选着字的时候，点屏幕任何地方都收起工具条、把选区也一起放掉。
         if (bar.state == TextToolbarStatus.Shown) {
@@ -2226,7 +1845,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     // 拖到哪就停在哪，而且**念也跟过去**。
                     //
                     // 画面和音频一起跳。只挪画面的话，屏幕上跳了，声音还在原处。
-                    // 隔一会儿「跟着念的位置滚」那条又把画面拽回去，看着就是「跳转回去」。
+                    // 隔一会儿「跟着念的位置滚」那条又把画面拽回去。
                     quietUntil = System.currentTimeMillis() + 2200
                     val n = pageCount.coerceAtLeast(1)
                     val target = (frac * (n - 1)).roundToInt().coerceIn(0, n - 1)
@@ -2312,26 +1931,11 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                 }
             }
         }
-        /*
-         * 点名字签 → 就地挑人。
-         *
-         * 以前这里先弹一张「这一段谁在说话」的清单，再点一行才挑 —— 两步。
-         * 签子已经写着是谁了，点它要的就是「换一个人」，中间那一步纯属多余。
-         */
+        /* 点名字签就地挑人，一步。 */
         whoAbs?.let { abs ->
-            /*
-             * 这一签在**哪一章**。
-             *
-             * 上下滚那一档一屏跨几章，签子可能来自下一章；按「当前读的那一章」
-             * 存 pin，位置就偏了一整章，改了不生效。这里按全书偏移反查章号。
-             */
+            /* 这一签在哪一章。上下滚那一档一屏跨几章，签子可能来自下一章；按「当前读的那一章」存 pin，位置就偏了一整章，改了不生效。 */
             val pinCh = atlas?.chOfAbs(abs) ?: ch
-            /*
-             * 候选人是**这本书里数出来的所有人**，不是「配过嗓子的角色表」。
-             *
-             * 上一版读 roles：只从书里数过人、还没手动配角色的《大秦》，这儿是空的，
-             * 于是点签子得到「这张表里还没有别人」。
-             */
+            /* 候选人是这本书里数出来的所有人，不是「配过嗓子的角色表」。 */
             val cb0 = runCatching {
                 com.pagefold.reader.book.RuleCodec
                     .fromJson(bookNow.castJson.ifBlank { settings.castJson })
@@ -2358,11 +1962,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                             } else ""
                         }
                     }.getOrDefault("")
-                    /*
-                     * 签子上带的是**全书偏移**（跟 Laid 的坐标一致），
-                     * 但 pin.at 跟 Cast.plan 的 srcStart 同一把尺子 —— 章内偏移。
-                     * 不换回来的话这条 pin 永远对不上任何一句，改了等于没改。
-                     */
+                    /* 签子上带的是全书偏移（跟 Laid 的坐标一致）。 */
                     val rel = (abs - (chapters.getOrNull(pinCh)?.start ?: 0)).coerceAtLeast(0)
                     val keep = cb.pins.filterNot { it.ch == pinCh && it.at == rel }
                     val next = cb.copy(pins = keep + com.pagefold.reader.book.Pin(pinCh, rel, who, e))
@@ -2505,14 +2105,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         }
         if (castOpen) {
             /*
-             * 派角是一整屏，不是一张纸。
-             *
-             * 上一版做成 84% 高的纸、底色透明，结果正文、控制条全从字缝里透出来，
-             * 「添加角色」和「上一句」叠在一起，看着像整页都坏了。用户要的是
-             * 「后面不要露出来」—— 那就给它一整屏、不透明底、自己吃状态栏。
-             *
-             * 「这一本怎么读」**不关**。它是下面那一层，被这屏盖住，状态（滚到哪儿）
-             * 原样留着；从这里退出去，落回的还是刚才那一格，不会回到阅读页。
+             * 派角是一整屏：不透明底、自己吃状态栏，正文与控制条不露出来。
              */
             CastScreen(
                 bookNow, app,
@@ -2534,11 +2127,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
             )
         }
 
-        /*
-         * 一句话条。让开状态栏，横着留足边，四秒自己走。
-         *
-         * 它不是要人处理的对话框，是一句过场话，看清就够了。
-         */
+        /* 一句话条。让开状态栏，横着留足边，四秒自己走。 */
         ps.error?.let { m ->
             var alive by remember(m) { mutableStateOf(true) }
             LaunchedEffect(m) {
@@ -2580,10 +2169,7 @@ private fun profileOf(app: App, book: BookMeta, s: Settings): CastProfile {
     val pool = Catalog.ours(s.engines, app.box.custom(), emptyList())
     val narWant = cb?.narrator?.ifBlank { s.narratorVoice } ?: s.narratorVoice
     val diaWant = cb?.dialog?.ifBlank { s.defaultVoice } ?: s.defaultVoice
-    /*
-     * 引擎认谁：勾上的名单 + 角色自己的名字。两边并起来，免得「勾了没建角色」这一段
-     * 和「建了角色没勾」那一段互相看不见。
-     */
+    /* 引擎认谁：勾上的名单 + 角色自己的名字。 */
     val known = LinkedHashSet<String>()
     val canon = LinkedHashMap<String, String>()
     cb?.pool?.filter { it.on }?.forEach { n ->
@@ -2628,12 +2214,7 @@ private suspend fun beginAt(
 ) = runCatching {
     beginAtUnsafe(app, feed, ch, rel, s, tune)
 }.onFailure {
-    /*
-     * 走到这儿是切句或取章出了问题，不是念不出来。
-     *
-     * 文案要指到事上：这一章还没切出句子，或者那一句的位置对不上。
-     * 写成「换一段再试」会让人以为合成失败，去查钥匙和网络，白费工夫。
-     */
+    /* 走到这儿是切句或取章出了问题，不是念不出来。 */
     BookPlayer.say("这一章还没切好句，先翻两页再开口")
 }
 
@@ -2710,12 +2291,7 @@ private fun BlockText(
     canTap: () -> Boolean,
     onLaid: (Laid, TextLayoutResult) -> Unit,
     onTag: ((Int) -> Unit)? = null,
-    /**
-     * 这一块的名字签，和它的「第几版」[tagSig]。
-     *
-     * 上下滚那一档，一屏上下跨着好几章；上一版这里一个签都没传，
-     * 所以「滑到下一章就完全不会自动标出来」。现在每块各自问一次自己那一章的。
-     */
+    /** 这一块的名字签，和它的「第几版」[tagSig]。 */
     tag: java.util.SortedMap<Int, String>? = null,
     tagSig: Int = 0,
     /** 「段间距」那一格。整章分块画，块内和块间都得按同一格走。 */
@@ -2726,18 +2302,10 @@ private fun BlockText(
         val t = a.bParaTo.getOrElse(bi) { f }
         val c = if (f < a.pCh.size) a.pCh[f] else 0
         val title = if (f == a.pStartOf(c)) a.chTitle.getOrElse(c) { "" } else ""
-        /*
-         * 块是段区间，不是整章 —— 直接把这一块的段范围交给 Laid，
-         * 别让它从章首排到章尾（一章五十万字，那一量就是几秒）。
-         */
+        /* 块是段区间，不是整章 —— 直接把这一块的段范围交给 Laid，别让它从章首排到章尾（一章五十万字，那一量就是几秒）。 */
         Laid(a, c, style, tag, Color.Unspecified, f, t, title, paraGap).also { it.growAll() }
     }
-    /*
-     * 块与块之间也是一条段界（一块正好收在段尾），底下补上同样的间距。
-     *
-     * 不补的话，块内的段落会按段间距分开，到块交界处忽然贴在一起 ——
-     * 一章七千块，这种「每五段紧一次」的接缝比完全不给段间距还显眼。
-     */
+    /* 块与块之间也是一条段界（一块正好收在段尾），底下补上同样的间距。 */
     val gap = with(LocalDensity.current) { laid.gapSp.sp.toDp() }
     Box(Modifier.padding(bottom = gap)) {
         TextBlock(
@@ -2762,10 +2330,7 @@ private fun TextBlock(
     canTap: () -> Boolean,
     /**
      * 这一页最多画几行。0 = 不限（上下滚那条路用）。
-     *
-     * 左右翻必须给。切页时量过「这段字在这么高的地方能放几行」，
-     * 画的时候就得按同一个行数收住 —— 中间只要差一行，
-     * 页脚上面就会露出小半个字身，那半个字下一页又没有。
+     * 左右翻必须给。
      */
     lines: Int = 0,
     onLaid: ((Laid, TextLayoutResult) -> Unit)? = null,
@@ -2782,14 +2347,8 @@ private fun TextBlock(
 
     key(selKey) {
         /*
-         * 选择域放在**块自己身上**，不往上包。
-         *
-         * 试过把 SelectionContainer 包在 LazyColumn 外面（想让选区跨块连下去），
-         * 后果是整个上下滚都废了：选择容器会把拖动的 move 事件先吃掉，
-         * LazyColumn 只在抬手那一下收到残余 —— 看着就是「松手才滚一点点」。
+         * 选择域放在块自己身上，不往上包。
          * 这是 Compose 里选择与滚动抢同一份指针事件的必然冲突，不是参数没调好。
-         *
-         * 所以：滚动优先。选字范围 = 一块（约七百字、五段），够选一两段话。
          */
         SelectionContainer {
             BasicText(
@@ -2818,10 +2377,7 @@ private fun TextBlock(
                                 if (c != null) {
                                     val off = lay.v?.getOffsetForPosition(c.position)
                                     if (off != null && off >= 0) {
-                                        /*
-                                         * 先看是不是点在名字签上。签子是旁注，点它要的是
-                                         * 「这一句归谁」，不是「从这里开始读」。
-                                         */
+                                        /* 先看是不是点在名字签上。签子是旁注，点它要的是「这一句归谁」，不是「从这里开始读」。 */
                                         val tg = laid.tagAt(from + off)
                                         if (tg != null && onTag != null) onTag(tg)
                                         else onDown(laid.abs(from + off))
@@ -2830,28 +2386,14 @@ private fun TextBlock(
                             }
                         }
                     }
-                    /*
-                     * 抬手算不算「点了一下」，四件事缺一不算：
-                     *   一、整趟手势里没有任何一个事件被上层滚动吃掉（吃了就是滑动）；
-                     *   二、手指走过的最大距离 < 12px —— 只看起点终点会被「绕一圈回来」骗过去；
-                     *   三、按下到抬起 < 320ms；
-                     *   四、外面那几道闸（正在滑、刚滑完、正收着选区）都放行。
-                     *
-                     * 少了第一条，LazyColumn 一边滑一边吃事件，抬手照样被当成点空白。
-                     */
+                    /* 抬手算不算「点了一下」。少了第一条，LazyColumn 一边滑一边吃事件，抬手照样被当成点空白。 */
                     .pointerInput(laid, from) {
                         awaitPointerEventScope {
                             var downPos: Offset? = null
                             var downAt = 0L
                             var far = 0f
                             var eaten = false
-                            /*
-                             * 按下那一下是不是落在名字签上。
-                             *
-                             * 落在签上就不算「点了一下空白」。不然点签改人这件事
-                             * 会顺手把控制栏翻出来 —— 上一版就是点一下签，
-                             * 上面那条控制栏跟着弹，正文还被顶走半屏。
-                             */
+                            /* 按下那一下是不是落在名字签上。 */
                             var onTagDown = false
                             while (true) {
                                 val e = awaitPointerEvent(PointerEventPass.Final)
@@ -2951,19 +2493,14 @@ private fun BarText(text: String, onClick: () -> Unit) {
         text, fontSize = 12.sp, color = s.inkDim,
         modifier = Modifier
             .clip(RoundedCornerShape(9.dp))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)
     )
 }
 
 // ───────────────────────── 篇目 ─────────────────────────
 
-/**
- * 篇目。半张纸，不是整屏。
- *
- * 整屏的列表会把人从正文里拽出来 —— 看书看到一半想跳回，眼睛还想留在原地。
- * 半张纸能看到十来回，够翻，也不遮住正在念的那一段。
- */
+/** 篇目。半张纸，不是整屏。整屏的列表会把人从正文里拽出来 —— 看书看到一半想跳回，眼睛还想留在原地。 */
 @Composable
 private fun TocSheet(
     titles: List<String>,
@@ -2992,10 +2529,7 @@ private fun TocSheet(
                         Modifier.fillMaxWidth()
                             .clip(RoundedCornerShape(9.dp))
                             .background(if (on) s.flameGhost else Color.Transparent)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { onPick(i) }
+                            .tap { onPick(i) }
                             .padding(vertical = 11.dp, horizontal = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -3030,12 +2564,7 @@ private data class PrepNow(
     val note: String,
 )
 
-/**
- * 预缓存实况一行。
- *
- * 「第 12 回 · 3 / 47 段」比任何说明都好用 —— 它回答的是「还要多久」。
- * 没在备货的时候，写清上次备到第几回，别留一片空白。
- */
+/** 预缓存实况一行。「第 12 回 · 3 / 47 段」比任何说明都好用 —— 它回答的是「还要多久」。 */
 @Composable
 private fun PrepLine(prep: PrepNow?, gap: Int) {
     val s = LocalSkin.current
@@ -3114,12 +2643,7 @@ private fun BookSetSheet(
     var pickVoice by remember { mutableStateOf<String?>(null) }
     var pickStyle by remember { mutableStateOf<String?>(null) }
 
-    /**
-     * 这本书的改动先存在这张纸上，再整张交出去。
-     *
-     * 每格都回头读 book.tuneJson 不行：那是外层传进来的旧值，改第二格时读到的是
-     * 改第一格之前的表，第一格就被抹掉了。
-     */
+    /** 这本书的改动先存在这张纸上，再整张交出去。 */
     var tuneJson by remember(book.id) { mutableStateOf(book.tuneJson) }
 
     val eff = remember(settings, tuneJson) {
@@ -3136,24 +2660,13 @@ private fun BookSetSheet(
         onTune(tuneJson)
     }
 
-    /*
-     * 子纸（挑嗓子、挑调门）必须摆在**这张纸外面**，同级。
-     *
-     * 写进这张纸的内容里，它拿到的是外层那段滚动的无限高度约束：
-     * 量不出来，点下去先画一帧错的、再跳到位置上 —— 用户说的
-     * 「往上闪了一下才倒到最下面」就是它。同级就没有这回事。
-     */
+    /* 子纸（挑嗓子、挑调门）必须摆在这张纸外面，同级。 */
     Box(Modifier.fillMaxSize()) {
     Paper(
         title = "这一本怎么读",
         sub = title,
         onClose = { shut() },
-        /*
-         * 半屏往上一点。用户的原话：「再稍微往上一点，到 65% 的状态就可以，不然太低了」。
-         *
-         * 50% 那版纸沿压得太低，第一屏只露出「版式」几行，看不出这张纸还有多少东西。
-         * 65% 正好把「版式 + 声音头两行」一起露出来。
-         */
+        /* 半屏往上一点。用户的原话：「再稍微往上一点，到 65% 的状态就可以，不然太低了」。 */
         maxFraction = 0.65f,
         heightFraction = 0.65f,
         scroll = false,
@@ -3301,12 +2814,7 @@ private fun BookSetSheet(
     }
 }
 
-/**
- * 一格「读法」。
- *
- * 右边两个数：一个是你现在设的，一个是定音里那份。
- * 一样就写「跟定音」，不一样就点亮，让你一眼看出这本被单独调过。
- */
+/** 一格「读法」。右边两个数：一个是你现在设的，一个是定音里那份。 */
 @Composable
 private fun TuneRow(
     key: String,
@@ -3334,7 +2842,7 @@ private fun TwoPick(options: List<String>, index: Int, onPick: (Int) -> Unit) {
                 modifier = Modifier
                     .clip(RoundedCornerShape(7.dp))
                     .background(if (on) s.flame else Color.Transparent)
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onPick(i) }
+                    .tap { onPick(i) }
                     .padding(horizontal = 13.dp, vertical = 7.dp)
             )
         }
@@ -3386,17 +2894,12 @@ private fun Key(text: String, onClick: () -> Unit) {
     val s = LocalSkin.current
     Box(
         Modifier.size(30.dp).clip(CircleShape).background(s.panel)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() },
+            .tap { onClick() },
         contentAlignment = Alignment.Center
     ) { Text(text, fontSize = 15.sp, color = s.inkDim) }
 }
 
-/**
- * 挑嗓子。
- *
- * 列表来自你真正配好的那些路嗓源，按路分组；一路没开就是空的，
- * 不再拿写死的八个名字充数 —— 那样挑出来的嗓子根本念不出声。
- */
+/** 挑嗓子。列表来自你真正配好的那些路嗓源，按路分组；一路没开就是空的，不再拿写死的八个名字充数 —— 那样挑出来的嗓子根本念不出声。 */
 @Composable
 private fun VoiceSheet(
     title: String,
@@ -3436,10 +2939,7 @@ private fun VoiceSheet(
                     val on = v.name == current
                     Row(
                         Modifier.fillMaxWidth()
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { onPick(v) }
+                            .tap { onPick(v) }
                             .padding(vertical = 11.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -3621,10 +3121,7 @@ private fun Desk(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp)
                     .clip(RoundedCornerShape(11.dp))
                     .background(if (sleepLeft > 0) s.flameGhost else s.panelSink)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() },
-                    ) { onTimer() }
+                    .tap { onTimer() }
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3684,7 +3181,7 @@ private fun ArrowWord(label: String, alignEnd: Boolean, onClick: () -> Unit) {
     val s = LocalSkin.current
     Row(
         Modifier.clip(RoundedCornerShape(8.dp))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -3700,12 +3197,7 @@ private fun ArrowWord(label: String, alignEnd: Boolean, onClick: () -> Unit) {
     }
 }
 
-/**
- * 一个能被按的「字」。
- *
- * 不画边框：一屏六个带框的格子，看着像仪表盘。靠一层很淡的底色说明这里能按，
- * 按下时深一格。选中的用朱色，别的只有底色变化。
- */
+/** 一个能被按的「字」。不画边框：一屏六个带框的格子，看着像仪表盘。 */
 @Composable
 private fun Tap(
     label: String,
@@ -3730,10 +3222,7 @@ private fun Tap(
             .clip(RoundedCornerShape(9.dp))
             .background(bg)
             .then(
-                if (enabled) Modifier.clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
-                ) { onClick() } else Modifier
+                if (enabled) Modifier.tap { onClick() } else Modifier
             )
             .padding(horizontal = if (wide) 20.dp else 13.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
@@ -3756,35 +3245,13 @@ private fun sleepShort(sec: Int): String {
 
 @Composable
 private fun SheetPop(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
-    /*
-     * 遮罩压一层纸色，不压黑。
-     *
-     * 黑色遮罩在任何一套主题里都是「另一个系统弹窗」，跟纸一点都不搭。
-     * 现在这层由 [Paper] 画，点它等于关这一张 —— 这是人能预期的动作。
-     *
-     * **高度跟着内容长，不给定高。**
-     *
-     * 原来写死 0.82：八个小方块只占三行，下面大半张纸全是空的，纸沿还顶到屏幕
-     * 五分之四那么高 —— 用户的原话是「不应该直接顶到顶格，不要有下面的空白」。
-     * 现在给上限（长内容到顶再滚），短内容就收成一张小纸。
-     */
+    /* 遮罩压一层纸色，不压黑。黑色遮罩在任何一套主题里都是「另一个系统弹窗」，跟纸一点都不搭。 */
     Paper(title = title, onClose = onClose) { content() }
 }
 
 /** 闹钟那样拨：上面一行常用，下面两列滚轮，时和分各拨各的。 */
-/**
- * 念到几时停。
- *
- * 不用「定时关闭」这个词 —— 那是一个功能名，不是一个说法。
- * 六个常用的点，横着一排，点一下就是它；要别的数自己加减。
- * 每档都带一句老话（一刻 / 半时 / 三刻），认得出是多久，看着也不像仪表盘。
- */
-/**
- * 念到几时停。
- *
- * 六个常用的点横着排，点一下就是它；要别的数自己加减。
- * 只留必要的一行状态，不写解释 —— 面板上每一句解释都是在替用户判断。
- */
+/** 念到几时停。不用「定时关闭」这个词 —— 那是一个功能名，不是一个说法。 */
+/** 念到几时停。六个常用的点横着排，点一下就是它；要别的数自己加减。 */
 @Composable
 private fun TimerPop(
     leftSec: Int,
@@ -3800,12 +3267,7 @@ private fun TimerPop(
         Box(Modifier.fillMaxSize().background(s.scrim))
         Column(
             Modifier.fillMaxWidth().align(Alignment.BottomCenter)
-                /*
-                 * 跟 [Paper] 一样：纸和遮罩不能一个颜色。
-                 *
-                 * 两处都写 s.ground 的话，纸沿看不出来，内容外围那圈内边距就成了
-                 * 「凭空空出来的一块」。用 surface + 一道 hair 边，纸在哪儿一眼看得见。
-                 */
+                /* 跟 [Paper] 一样：纸和遮罩不能一个颜色。 */
                 .background(s.surface, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 .border(1.dp, s.hair, RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                 // 面板自己吃掉点击。
@@ -3841,7 +3303,7 @@ private fun TimerPop(
                             Modifier.weight(1f)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (on) s.flame else s.panelSink)
-                                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                                .tap {
                                     mins = m
                                 }
                                 .padding(vertical = 13.dp),
@@ -3933,7 +3395,7 @@ private fun TopWord(text: String, onClick: () -> Unit) {
         text, fontSize = 12.sp, color = s.inkDim,
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(horizontal = 9.dp, vertical = 7.dp)
     )
 }
@@ -3951,7 +3413,7 @@ private fun SoftWord(text: String, onClick: () -> Unit, on: Boolean = false, ena
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
             .background(if (on && enabled) s.flameGhost else Color.Transparent)
-            .clickable(enabled = enabled, indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap(enabled) { onClick() }
             .padding(horizontal = 11.dp, vertical = 8.dp)
     )
 }
@@ -3961,7 +3423,7 @@ private fun BigPause(playing: Boolean, onClick: () -> Unit) {
     val s = LocalSkin.current
     Box(
         Modifier.size(56.dp).clip(CircleShape).background(s.flame)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() },
+            .tap { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(
@@ -3973,12 +3435,7 @@ private fun BigPause(playing: Boolean, onClick: () -> Unit) {
     }
 }
 
-/**
- * 一条拖到底的进度条。做法跟定音里的滑杆（`Ruler`）一致：
- * 整条都能按 —— 横着推接手，一路跟到抬手；竖着推让路给列表；按一下不挪就是跳过去。
- *
- * 手柄只画不接手势，两端不会被裁掉半颗。轨道铺满整宽，第一页时手柄贴着左边。
- */
+/** 一条拖到底的进度条。做法跟定音里的滑杆（Ruler）一致：整条都能按 —— 横着推接手。 */
 @Composable
 private fun PageSeek(
     progress: Float,

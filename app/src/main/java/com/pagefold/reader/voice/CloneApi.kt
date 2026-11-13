@@ -14,25 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/**
- * 拿一段录音，做成一副能一直用的音色。
- *
- * 各家做完之后**给出的东西不一样**，这一点决定了后面谁去念书，所以这里分三条路：
- *
- * | 家 | 做完给什么 | 之后谁念 |
- * |---|---|---|
- * | MiMo | 什么都不给。音色就是那段录音本身 | **克隆模型自己念**，每句都重发整段样本 |
- * | 硅基流动 | 一个 uri（`speech:名字:账号:id`） | 朗读模型念，样本只在服务端存了一份 |
- * | MiniMax | 一个 voice_id | 朗读模型念（t2a_v2），样本只在服务端存了一份 |
- *
- * 差别不是小事：MiMo 那条每念一句都要把几十兆的样本重发一遍，
- * 一部长篇不可能这么走；硅基和 MiniMax 只发一个短 id，才是有声书能用的样子。
- * 所以**做完的音色在这三种情况下 kind 不同**：MiMo 是 clone（每次带样本），
- * 另外两家是 preset（就是一个名字，跟内置音色一样对待）。
- *
- * 火山、百炼、OpenAI 目前没有「一段录音换一副音色」的公开接口（火山要走声音复刻
- * 产品线单独开通，百炼要单独申请权限），这里不装作有。
- */
+/** 拿一段录音，做成一副能一直用的音色。 */
 object CloneApi {
 
     private val json = "application/json".toMediaType()
@@ -57,7 +39,6 @@ object CloneApi {
 
     /**
      * 这副嗓源能不能做克隆，需要用户另外填什么。
-     *
      * @return null = 这家做不了；否则返回「还要不要那句参考文本」
      */
     fun shape(proto: String, base: String): Shape? {
@@ -79,7 +60,6 @@ object CloneApi {
 
     /**
      * 做一副音色。
-     *
      * @param record  录音原文，硅基必须给，别的家不用
      * @param mime    录音的 MIME，判不出来的给空串
      */
@@ -138,12 +118,7 @@ object CloneApi {
         }
     }
 
-    /**
-     * 硅基流动：POST {base}/v1/uploads/audio/voice（multipart）
-     *
-     * 回 `{"uri":"speech:名字:账号:id"}`，这个 uri 就是之后念书时塞进 `voice` 的那一截。
-     * `text` 是**录音里说的那句话**，它的作用是让服务端对齐音色，不填会被拒。
-     */
+    /** 硅基流动：POST {base}/v1/uploads/audio/voice（multipart）回 {"uri":"speech:名字。 */
     private fun uploadSilicon(
         base: String,
         key: String,
@@ -196,15 +171,7 @@ object CloneApi {
         }
     }
 
-    /**
-     * MiniMax：两步。
-     *
-     *   1. POST {base}/v1/files/upload  purpose=voice_clone  → file_id
-     *   2. POST {base}/v1/voice_clone   {file_id, voice_id, model} → 激活
-     *
-     * voice_id 有格式要求：8–256 字符、首字符英文字母、只用字母数字和 - _。这里自己造一个。
-     * 注意它**七天内不用就会被删**，所以做完立刻试念一次，把它激活。
-     */
+    /** MiniMax：两步。1. POST {base}/v1/files/upload  purpose=voice_clone  → fil。 */
     private fun cloneMiniMax(
         base: String,
         key: String,

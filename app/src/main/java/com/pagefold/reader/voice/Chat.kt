@@ -16,14 +16,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 一路「会想事」的接口。
- *
- * 跟念书那几路嗓源分开：那边管的是「把字变成声音」，这边管的是「替人拿主意」。
- * 分开的理由很实在 —— 一家既能念书又能聊天的服务，两边的模型名、计费、限流都不一样；
- * 混在一张表里，每加一家都要判两遍「这条是朗读的还是聊天的」。
- *
  * @param auth 认证头怎么放。`bearer` = Authorization: Bearer xxx；
- *             `api-key` = 头名就叫 api-key（小米那一路）。空 = 按地址推。
- *             这一格必须是可空的：Gson 反序列化不走构造器，老存档里没有它就是 null。
  */
 data class ChatCfg(
     val id: String,
@@ -41,14 +34,9 @@ data class ChatCfg(
 
 /**
  * 一家聊天服务的固定参数。
- *
  * @param base   接口地址。填到这里，用户只差一把钥匙。
  * @param prefer 拉回模型清单之后，按这个顺序自动挑一个。挑不到就挑清单第一个。
- *               只用于「填完钥匙就不用再选」这一件事，不是白名单 —— 清单照样全列。
  * @param note   这家和别家不一样的地方，一句话，摆在卡片副标题上。
- *
- * 【会过期】地址与模型代际随各家发版变动。截至 2026-11 有效；
- * 失效的征象是「测一下」回 404，届时查该家控制台的「接口地址」与「模型列表」两页。
  */
 data class ChatPreset(
     val id: String,
@@ -137,12 +125,7 @@ object Chats {
     /** 出厂那一排。地址已经填好，缺的只有钥匙。 */
     val DEFAULT: List<ChatCfg> = ChatPresets.fresh()
 
-    /**
-     * 读存档里的那串。
-     *
-     * 老存档里没有这一格（空串），直接给出厂表 —— 不必写迁移。
-     * 出厂表里缺的那几家补到末尾：换了新版本，用户手上那份不该少几家。
-     */
+    /** 读存档里的那串。老存档里没有这一格（空串），直接给出厂表 —— 不必写迁移。 */
     fun decode(raw: String?): List<ChatCfg> {
         if (raw.isNullOrBlank()) return DEFAULT
         val t = object : TypeToken<List<ChatCfg>>() {}.type
@@ -190,8 +173,6 @@ object Chats {
 
 /**
  * 聊天口的调用。OpenAI 兼容的那一套：POST {base}/chat/completions。
- *
- * 只做两件事：问一句话拿回一段字；拉一份模型清单。
  * 不流式、不存历史 —— 这个应用里它每次都是独立一问，没有「接着上一句聊」这回事。
  */
 object Chat {
@@ -235,7 +216,6 @@ object Chat {
 
     /**
      * 问一句，拿回一段字。
-     *
      * @param system 规矩。这段是「你是谁、按什么口径办」，每次都一样。
      * @param user   这一回的具体内容。
      */
@@ -313,20 +293,10 @@ object Chat {
 
     private val modelMem = HashMap<String, List<String>>()
 
-    /**
-     * 一次验收回来的一坨：通没通，以及**对面原话**。
-     *
-     * 不把回话压成「通」或「钥匙不对」—— 用户要看的就是那句话本身。
-     * 通了看他回的问候，没通看服务端吐的原文（含状态码和 body 开头）。
-     */
+    /** 一次验收回来的一坨：通没通，以及对面原话。 */
     data class Hit(val ok: Boolean, val said: String)
 
-    /**
-     * 验收：真发一句「你好」过去，把对面的回话原样端回来。
-     *
-     * 不判 HTTP 200 —— 地址错、钥匙错、模型名错，三种错对面都可能回 200
-     * 带一段错误说明，只有读出来才知道通没通。
-     */
+    /** 验收：真发一句「你好」过去，把对面的回话原样端回来。 */
     suspend fun hello(cfg: ChatCfg): Hit = withContext(Dispatchers.IO) {
         Chats.why(cfg)?.let { return@withContext Hit(false, it) }
         var c = cfg
@@ -348,12 +318,7 @@ object Chat {
 
     const val OK = "通"
 
-    /**
-     * 把一段回话里的 JSON 抠出来。
-     *
-     * 会说话的那几家常常把 JSON 包在 ```json 里，或者前面先来一句「好的，以下是结果」。
-     * 这两样都不算错，掐掉就行 —— 不该让包装把结果废掉。
-     */
+    /** 把一段回话里的 JSON 抠出来。 */
     fun tidy(raw: String): String {
         var t = (raw ?: "").trim()
         if (t.startsWith("```")) {

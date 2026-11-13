@@ -1,6 +1,7 @@
 package com.pagefold.reader.kit
 
 import androidx.activity.compose.BackHandler
+import com.pagefold.reader.kit.tap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,19 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-/**
- * 一张纸：从底下抽上来，压在原来那一屏上。
- *
- * **不用 Dialog 窗口。** 试着改过一版，纸上会多出两个毛病，都是窗口自己的：
- * 点下去先按窗口默认尺寸（包着内容、居屏幕中间）画一帧，然后才被改成满屏 ——
- * 看着就是「往上闪一下再倒到底下」；还有系统那层窗口动画会淡入一下。
- * 画在同一个界面里没有这两步，点下去就已经在那儿了。
- *
- * 纸套纸的规矩：**不许把纸写进另一张纸的内容里**，写在外层纸后面（同级），
- * 后画的压在上面。比开窗口省事，也还是原来那个手感。
- *
- * 内容区带 `weight(1f)` 的纸传 [heightFraction]，要一个确定高度才分得到空间。
- */
+/** 一张纸：从底下抽上来，压在原来那一屏上。 */
 @Composable
 internal fun Paper(
     title: String,
@@ -62,23 +51,14 @@ internal fun Paper(
 ) {
     val s = LocalSkin.current
 
-    /*
-     * 返回键先收这张纸。
-     *
-     * 纸是叠上去的，按返回该退的是「最上面这一层」—— 上一版所有纸都靠调用方
-     * 自己记得处理，漏掉一处就退回阅读页。写在纸里，一层都不用再记。
-     * 后画的纸后注册，优先收到返回，正好是「先收子纸、再收父纸」。
-     */
+    /* 返回键先收这张纸。纸是叠上去的，退的是最上面这一层。 */
     BackHandler { onClose() }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val cap = maxHeight * maxFraction
         Box(
             Modifier.fillMaxSize().background(s.scrim)
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onClose() }
+                .tap { onClose() }
         )
         Column(
             Modifier
@@ -88,13 +68,7 @@ internal fun Paper(
                     if (heightFraction != null) Modifier.fillMaxHeight(heightFraction)
                     else Modifier.heightIn(max = cap)
                 )
-                /*
-                 * 纸和底下的遮罩必须不是一个颜色。
-                 *
-                 * 上一版两处都写 s.ground（遮罩再压 0.72 的透明），于是整屏一个色：
-                 * 纸的上沿看不出来，内容左边那点留白就成了「凭空空出来的一块」。
-                 * 用 surface（各套材质的不透明底）+ 一道 hair 边，纸在哪儿一眼就看得见。
-                 */
+                /* 纸和底下的遮罩必须不是一个颜色。 */
                 .background(s.surface, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                 .border(
                     1.dp, s.hair,

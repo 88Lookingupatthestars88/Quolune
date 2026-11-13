@@ -6,7 +6,6 @@ import java.io.File
 
 /**
  * 一句话：谁在书里的哪一处，说了什么。
- *
  * @param ch 章号（0 起，跟 [Chapters] 那张表同一套编号）
  * @param at 章内偏移。指向引号里第一个字 —— 拿它就能回阅读页定位
  * @param text 引号里那一段，掐过 120 字。跳转用的是 [at]，不是它
@@ -17,22 +16,7 @@ data class Quote(
     val text: String,
 )
 
-/**
- * 这本书里谁说了哪些话。
- *
- * **和角色表分开存**：角色表是用户的东西，句库是正文的索引，丢了能重建。
- * 混在一起，改一次嗓子就把十几 MB 一起重写一遍。
- *
- * 一个人一个文件：
- *   files/lines/<书>/index.json      谁、共几句、分在哪几章
- *   files/lines/<书>/<名字哈希>.jsonl  一句一行，制表符分隔
- *
- * 为什么不用一个大文件：点开「老李」只该读他那一个。一个大文件的话，
- * 四 GB 的机器上翻一个角色就要把十几 MB 全摊开。
- *
- * 写法为什么是「一句一行」：Gson 解析十几 MB 的数组，峰值是文件的两三倍；
- * 逐行读只有当前这一行在内存里。
- */
+/** 这本书里谁说了哪些话。和角色表分开存：角色表是用户的东西，句库是正文的索引，丢了能重建。 */
 object Lines {
 
     /** 索引缓存。一本书一份，改完就换。 */
@@ -74,18 +58,9 @@ object Lines {
     private fun fileOf(ctx: Context, bookId: String, name: String): File =
         File(dir(ctx, bookId), Integer.toHexString(name.hashCode()) + ".jsonl")
 
-    /**
-     * 这个人的全部话，按章、按位置排好。
-     *
-     * 只读他那一份文件。三百句的书大约 30 KB，读一次几十毫秒。
-     */
+    /** 这个人的全部话，按章、按位置排好。 */
     fun of(ctx: Context, bookId: String, name: String): List<Quote> {
-        /*
-         * 先试二进制索引。
-         *
-         * 旧书还没建索引，走 readLines 逐行读 —— 结果一样，只是慢一点。
-         * 建库那一次顺手写索引，之后就再也不用解析 jsonl 了。
-         */
+        /* 先试二进制索引。旧书还没建索引，走 readLines 逐行读 —— 结果一样，只是慢一点。 */
         runCatching {
             val t = LineIndex.of(ctx, bookId, name)
             if (t != null) {
@@ -95,14 +70,7 @@ object Lines {
             }
         }
         val got = readLines(ctx, bookId, name)
-        /*
-         * 顺手补一份索引。
-         *
-         * 两件来由：一是旧书从来没建过；二是**第一版的索引是坏的**（偏移记的是字符下标，
-         * 读出来一串 `��`），读到就作废，这里重新写一份对的 —— 否则用户得去
-         * 「重数」一次，那张纸才会正常。
-         * 一个人几千句也就几十 KB，写一次几毫秒。
-         */
+        /* 顺手补一份索引。两件来由：一是旧书从来没建过；二是第一版的索引是坏的（偏移记的是字符下标，读出来一串 ��），读到就作废。 */
         if (got.isNotEmpty()) runCatching { LineIndex.write(ctx, bookId, name, got) }
         return got
     }
@@ -131,12 +99,7 @@ object Lines {
 
     // ── 建库 ────────────────────────────────────────────────
 
-    /**
-     * 只读头几句。
-     *
-     * 挑「发哪一句给他看」不需要他那三百句 —— 头五句里挑最长的那句就够。
-     * 整份读一遍是几十毫秒乘上几百个人，点一次等十几秒。
-     */
+    /** 只读头几句。挑「发哪一句给他看」不需要他那三百句 —— 头五句里挑最长的那句就够。 */
     fun head(ctx: Context, bookId: String, name: String, n: Int = 5): List<Quote> {
         runCatching {
             val t = LineIndex.of(ctx, bookId, name)
@@ -167,12 +130,7 @@ object Lines {
         return out
     }
 
-    /**
-     * 这个人的话，扣掉已改派的、加上改派给他的。
-     *
-     * 句库存的是「正文里认出来的」，改派是「用户认出来的」。两边都要算，
-     * 否则划走一句之后，原来那张纸上还挂着它。
-     */
+    /** 这个人的话，扣掉已改派的、加上改派给他的。 */
     fun view(ctx: Context, bookId: String, name: String, pins: List<Pin>): List<Quote> {
         val mine = of(ctx, bookId, name)
         val away = java.util.HashSet<Long>(8)
@@ -196,11 +154,7 @@ object Lines {
 
     /**
      * 扫一遍全书，把每个人的话都存下来。
-     *
-     * 调用方是数人那一条线程（[Counts]），跑在 MIN_PRIORITY 上，不抢主线程。
-     *
      * @param names 要收的人。名单外的句子一律不存 —— 那本《大秦》里有上千个
-     *              被当成主语的词，全存下来就是几百兆的垃圾。
      * @param onEach 每扫完一章回调一次，参数是（已完成章数、总章数）。界面拿它显示进度。
      * @return 存下来的总句数。
      */
@@ -231,7 +185,7 @@ object Lines {
             }
         }
 
-        // 重扫：老文件先清掉，不然上一版的句子会跟着留下来。
+        // 重扫：先清老文件，否则旧句子会跟着留下来。
         runCatching { d.listFiles()?.forEach { if (it.name.endsWith(".jsonl")) it.delete() } }
 
         val n = chapters.size
@@ -256,13 +210,7 @@ object Lines {
         runCatching { File(d, "index.json").writeText(idx.toString()) }
         head[bookId] = cnt.toMap()
 
-        /*
-         * 顺手给每个人落一份二进制索引。
-         *
-         * 点进「他说过的话」是把一个人全部的句子摊出来，几千句；再加上
-         * 「改派要扣、要加」，每次组合都从头读一遍 jsonl 就白等了。
-         * 这一次建库本来就把所有人扫过一遍，就地写出来最省。
-         */
+        /* 顺手给每个人落一份二进制索引。 */
         runCatching {
             cnt.forEach { (who, _) ->
                 /* 直接从刚写完的 jsonl 逐行读一遍，不经过 of()（它现在会先找索引）。 */
@@ -274,10 +222,6 @@ object Lines {
 
     /**
      * 单独给一个人补扫。
-     *
-     * 用户手写一个名字进来，句数是 0 —— 那不叫 0，那叫「没数过」。
-     * 这里按名字在全书中跑一遍，把他的话补进句库。
-     *
      * @return 他的全部话（含原有的）。
      */
     fun addOne(
@@ -348,17 +292,7 @@ object Lines {
 
     private fun isOpen(c: Char): Boolean = c == '\u201C' || c == '\u300C' || c == '\u300E'
 
-    /**
-     * 在一章里找出「谁说了哪句话」。
-     *
-     * 判据只有一条：引号前面那**最后一个分句**里出现的名字。
-     * 「扶苏走上前，关上房门，沉声道：“……”」——最后一个分句是「沉声道」，
-     * 那一句里没有名字，于是退回整段（往前 140 字）找第一个。
-     *
-     * 这一条跟 [Cast.plan] 用的是同一套道理，但这里是独立实现的：
-     * plan 要切句、要认调门、要拼嗓子，为了一个索引跑一遍太重；
-     * 这里只要位置和归属。
-     */
+    /** 在一章里找出「谁说了哪句话」。 */
     private fun scan(
         text: String,
         from: Int,
@@ -377,13 +311,7 @@ object Lines {
             var e = i + 1
             while (e < to && text[e] != close && text[e] != '\n') e++
             if (e - i > 2) {
-                /*
-                 * `at` 记的是**引号里第一个非空字**的位置。
-                 *
-                 * 必须跟播放器那一路对齐：Cast.plan 给的 srcStart 也是这个位置
-                 * （它先 trim 掉引号两边的空白）。两边差一格，改派就永远对不上，
-                 * 用户点「转给别人」之后那一句还是原来的嗓子 —— 看着像没生效。
-                 */
+                /* at 记的是引号里第一个非空字的位置。 */
                 var s0 = i + 1
                 while (s0 < e && (text[s0] == ' ' || text[s0] == '\u3000' || text[s0] == '\r')) s0++
                 val lo = maxOf(para, i - 90)
@@ -417,12 +345,7 @@ object Lines {
     /** 受话人标记：这些字后面那个名字不是主语。 */
     private val PREP = "对向朝给被把跟和与同"
 
-    /**
-     * 名字查表。
-     *
-     * 拿三个哈希表（二字 / 三字 / 四字）代替「每个位置试一遍 substring」。
-     * 三百多万字的书，每字一个 substring 就是三百万次分配，光 GC 就够数人了。
-     */
+    /** 名字查表。拿三个哈希表（二字 / 三字 / 四字）代替「每个位置试一遍 substring」。 */
     private class Namer(names: List<String>) {
 
         private val two = HashMap<Int, String>(names.size * 2)
@@ -485,14 +408,7 @@ object Lines {
     }
 }
 
-/**
- * 单句改派。
- *
- * 用户看见「这句其实是老王说的」，就把它从老李那儿划到老王名下。
- * **不改规则** —— 规则是正则，改一条会连带改掉成千上万句。这里只认这一个位置。
- *
- * 带上 [text]：转过去之后那句原文还在自己身上，不用回头去别人的文件里找。
- */
+/** 单句改派。用户看见「这句其实是老王说的」，就把它从老李那儿划到老王名下。 */
 data class Pin(
     val ch: Int,
     val at: Int,

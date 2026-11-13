@@ -1,6 +1,7 @@
 package com.pagefold.reader.kit
 
 import androidx.compose.foundation.Canvas
+import com.pagefold.reader.kit.tap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -32,19 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/**
- * 底栏五格。顺序：书在最左，关于在最右。
- *
- * 这一条是自己画的，不用任何 Material 图标。
- *
- * 图标库里的那几枚（MenuBook / PlayCircle / Tune）是通用件 —— 谁都在用，
- * 摆在一起就是「另一个应用」。这里五个字形全按「书」这一件事来：
- * 一册摊开的书、一排说话的杆、一只耳朵的圈、几道律管的横线、一个句点。
- * 笔画一律 1.5dp 圆头，和正文的字重是一套。
- *
- * 形状上也不做「浮起的胶囊」：整条贴着屏幕底边，顶上一道极细的分隔线，
- * 靠一道书签似的短线标出选中的那一格。栏是页的一部分，不是浮在页上的东西。
- */
+/** 底栏五格。顺序：书在最左，关于在最右。 */
 val DOCK_ITEMS: List<String> = listOf("书房", "音色", "试听", "定音", "关于")
 
 val DockHeight = 52.dp
@@ -71,10 +60,7 @@ fun Dock(tab: Int, onPick: (Int) -> Unit, modifier: Modifier = Modifier) {
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onPick(i) },
+                        .tap { onPick(i) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {

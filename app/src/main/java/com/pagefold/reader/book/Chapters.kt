@@ -7,13 +7,8 @@ import java.io.DataOutputStream
 import java.io.File
 
 /**
- * 章节目录的落盘缓存。
- *
- * 一本 172 万字的书切一遍章要跑五万行、五行正则，几百毫秒到一秒。
+ * 章节目录的落盘缓存。一本 172 万字的书切一遍章要跑五万行、五行正则，几百毫秒到一秒。
  * 每次打开都重跑，就是「点开一本书要等半天」的根。
- *
- * 这里只做一件事：切一次，存到 files/ch/<书>.idx，下次直接读。
- * 用「字数 + 首尾各 64 字」当指纹，正文被替换过就自动作废重切。
  */
 object Chapters {
 
@@ -33,15 +28,7 @@ object Chapters {
         return cut
     }
 
-    /**
-     * 只读落盘的那份目录，不切、不比对指纹。
-     *
-     * 台账一屏一章地翻，它只要「第 N 章从第几个字到第几个字」。
-     * 走 [of] 的话要把整本正文读进内存重算指纹 —— 三百万字的书，
-     * 点一下台账就是七兆字符进堆。这里只读那几十 KB 的索引。
-     *
-     * 没建过目录（还没进过这本书）就是 null，调用方自己说一句。
-     */
+    /** 只读落盘的那份目录，不切、不比对指纹。 */
     fun cached(ctx: Context, id: String): List<Chapter>? {
         val f = File(File(ctx.filesDir, "ch"), "$id.idx")
         if (!f.exists()) return null

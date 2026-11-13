@@ -2,10 +2,7 @@ package com.pagefold.reader.voice
 
 import java.io.IOException
 
-/**
- * 请求头里的钥匙。OkHttp 只收可见 ASCII，遇上汉字会抛
- * IllegalArgumentException（RuntimeException，抓不住就闪退）。
- */
+/** 请求头里的钥匙。OkHttp 只收可见 ASCII。 */
 object Auth {
 
     const val MAX = 4096

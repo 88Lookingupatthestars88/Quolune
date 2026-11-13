@@ -7,11 +7,6 @@ import java.io.File
 
 /**
  * 一副音色自己的调法。
- *
- * 数值一律用百分数，100 是不动。七家的量纲不在界面上分叉：
- * 界面上永远是 50–200，各家发请求的时候自己折算成自己那套
- * （火山的 -50…100、MiniMax 的 -12…12、硅基的 -10…10 dB）。
- *
  * @param mood     情绪档。空 = 跟随全局那一档。
  * @param lang     语种。只有百炼认这一格。
  * @param bright   低沉 ↔ 明亮。MiniMax 的 voice_modify.pitch，-100…100。
@@ -45,10 +40,8 @@ data class Vt(
 }
 
 /**
- * 音色调法仓。
- *
- * 跟 [Tune] 一个思路：没调过的音色根本不进这张表，所以外面改了全局，
- * 它立刻跟着变。调过的才留一行，键是音色 id。
+ * 音色调法仓。跟 [Tune] 一个思路：没调过的音色根本不进这张表，所以外面改了全局，它立刻跟着变。
+ * 调过的才留一行，键是音色 id。
  */
 class VoiceTune(ctx: Context) {
 
@@ -66,10 +59,7 @@ class VoiceTune(ctx: Context) {
             gson.fromJson<MutableMap<String, Vt>>(f.readText(), type)
                 ?: mutableMapOf()
         }.getOrDefault(mutableMapOf())
-        /*
-         * 老存档里没有后来才加的那几个键，Gson 不走 Kotlin 构造器、也不看可空性，
-         * 照直往字段里塞 null —— 一读就是 NPE。这里逐个兜平。
-         */
+        /* 老存档里没有后来才加的那几个键，Gson 不走 Kotlin 构造器、也不看可空性，照直往字段里塞 null —— 一读就是 NPE。 */
         val clean = m.mapValues { (_, v) ->
             v.copy(
                 mood = v.mood ?: "",
@@ -88,12 +78,7 @@ class VoiceTune(ctx: Context) {
     /** 这一副调成什么样。没调过就是原样。 */
     fun of(id: String): Vt = all()[id] ?: Vt()
 
-    /**
-     * 存一副。
-     *
-     * 存回原样等于「没调过」—— 直接把这一行摘掉，让它重新跟着全局走。
-     * 留着一条全默认的记录，外面改了全局它就不跟了。
-     */
+    /** 存一副。存回原样等于「没调过」—— 直接把这一行摘掉，让它重新跟着全局走。 */
     fun put(id: String, v: Vt) {
         val m = all()
         if (v.virgin) m.remove(id) else m[id] = v
@@ -128,12 +113,7 @@ enum class Knob(val cn: String) {
 
 /**
  * 一套协议能调哪几样。
- *
- * 这张表照着各家文档里真有的字段填，不照我们代码里现在发了什么填：
- * 文档里有的、之前没接的，一并算「能调」，接上就是。
- *
  * @param model 有的家看模型分能力：小米的 voicedesign 不接受 voice，
- *              OpenAI 只有 gpt-4o 那几个认 instructions。所以模型名也进判据。
  * @param kind  造出来的音色只认那句描述，复刻的只认那段录音 —— 这两类不给调。
  */
 object Caps {
@@ -163,18 +143,11 @@ object Caps {
 
     fun of(proto: String, model: String, kind: String = ""): List<Knob> {
         val m = model.lowercase()
-        /*
-         * 造出来的音色：声音是那句描述生成的，但快慢、音调、温度它照样认 ——
-         * 这几样是跟那句描述一起从同一条 user 消息发过去的，不冲突。
-         * 复刻的音色只认那段录音，不给。
-         */
+        /* 造出来的音色：声音是那句描述生成的，但快慢、音调、温度它照样认 ——这几样是跟那句描述一起从同一条 user 消息发过去的，不冲突。 */
         if (kind == "design" || m.contains("voicedesign")) {
             return if (proto == "mimo") listOf(Knob.SPEED, Knob.PITCH, Knob.TEMP) else emptyList()
         }
-        /*
-         * 小米的复刻音色更要紧：它的「快慢」只能靠一条 user 消息表达，
-         * 而复刻音色发 user 正是「开头多一句话」的入口。这一格不给，比给了偶尔多念一句好。
-         */
+        /* 小米的复刻音色更要紧：它的「快慢」只能靠一条 user 消息表达，而复刻音色发 user 正是「开头多一句话」的入口。 */
         if (proto == "mimo" && kind == "clone") return emptyList()
         return when (proto) {
             "system" -> listOf(Knob.SPEED, Knob.PITCH)
@@ -206,12 +179,7 @@ object Caps {
         model.contains("silicon") || model.contains("cosyvoice") || model.contains("moss") ||
             model.contains("indextts") || model.contains('/')
 
-    /**
-     * 这一家能给哪几样，一句写完，给分组标题右边用。
-     *
-     * 写能力，不写数量：「6 副」那种数字在标题右边没有用 ——
-     * 用户要知道的是这一家能不能调快慢、有没有音调。
-     */
+    /** 这一家能给哪几样，一句写完，给分组标题右边用。 */
     fun brief(proto: String, model: String): String = when (proto) {
         "system" -> "快慢 · 音调"
         "mimo" -> "快慢 · 音调 · 调门 · 温度"

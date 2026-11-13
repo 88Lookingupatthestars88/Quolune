@@ -8,19 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-/**
- * 试听用的播放器，全局一个。
- *
- * 谁在响，只有一个地方记着：这里。界面不许自己再存一份。
- *
- * 以前每一页各存一个 `playing`，靠播放器的回调去清 —— 回调没来、来晚了、
- * 或者那份状态已经被组合销毁，都会让按钮停在「停」上，而且再点一下走的是
- * 「停止」那条路，永远听不到第二遍。现在 `playingId` 本身就是 Compose 状态，
- * 播完在哪儿清的、谁清的都不重要，界面上看到的就是它。
- *
- * 回调一律回到主线程再改 —— MediaPlayer 的回调在某些机型上不在主线程，
- * 在那儿直接改状态，重组有可能收不到。
- */
+/** 试听用的播放器，全局一个。谁在响，只有一个地方记着：这里。 */
 object Audition {
 
     private val main = Handler(Looper.getMainLooper())

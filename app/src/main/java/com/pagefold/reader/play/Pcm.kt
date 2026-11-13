@@ -6,13 +6,7 @@ import android.media.MediaFormat
 import java.io.ByteArrayOutputStream
 import java.io.File
 
-/**
- * 把一段音频拆成裸 PCM。
- *
- * 系统 TTS 只收裸 PCM，不收 wav/mp3 文件。所以合成完得自己拆开。
- * wav 直接读头，其它交给系统的解码器。
- * 采样率和声道数照原样返回 —— 不重采样，省一层出错的地方。
- */
+/** 把一段音频拆成裸 PCM。系统 TTS 只收裸 PCM，不收 wav/mp3 文件。 */
 object Pcm {
 
     data class Raw(val pcm: ByteArray, val rate: Int, val channels: Int)

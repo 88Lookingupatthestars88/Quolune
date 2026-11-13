@@ -6,18 +6,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/**
- * 材质种类。决定面板怎么画：
- *  GLASS 半透明叠加 + 亮边
- *  FROST 实色 + 噪点颗粒
- *  HUD   切角 + 描边 + 扫描线
- *  PAPER 实色纸面 + 极轻阴影
- */
+/** 材质种类。决定面板怎么画：GLASS 半透明叠加 + 亮边FROST 实色 + 噪点颗粒HUD   切角 + 描边 + 扫描线PAPER 。 */
 enum class Mat { GLASS, FROST, HUD, PAPER }
 
-/**
- * 一整套视觉皮肤。所有界面只读这里，任何地方不写死颜色。
- */
+/** 一整套视觉皮肤。所有界面只读这里，任何地方不写死颜色。 */
 data class Skin(
     val key: String,
     val label: String,
@@ -60,22 +52,10 @@ data class Skin(
     val cut: Boolean,
 ) {
     val accentSoft: Color get() = flame.copy(alpha = if (dark) 0.16f else 0.12f)
-    /**
-     * 浮层底下的那层「压暗」。
-     *
-     * 不用黑。黑遮罩在纸墨、玻璃、磨砂里都是「另装了一个系统弹窗」，
-     * 跟纸一点关系都没有。压一层纸色、更深一点，后面的字淡下去，
-     * 眼前还是这张纸 —— 只是暗了一格。
-     */
+    /** 浮层底下的那层「压暗」。不用黑。 */
     val scrim: Color get() = ground.copy(alpha = if (dark) 0.80f else 0.74f)
 
-    /**
-     * 不透明底。**凡是要遮住下层的构件（弹层、底栏、对话框、输入法面板）都必须用它。**
-     *
-     * 为什么要单独一个字段：玻璃材质的 panel 是 5.5% 的白，
-     * 一旦有人写 panel.copy(alpha = 0.99f) 就会变成 99% 实心白，
-     * 而正文色接近纯白 —— 白底白字。这是 v2 的致命 bug，不是审美问题。
-     */
+    /** 不透明底。凡是要遮住下层的构件（弹层、底栏、对话框、输入法面板）都必须用它。 */
     val surface: Color
         get() = when (mat) {
             Mat.GLASS -> if (dark) Color(0xFF12151C) else Color(0xFFF7F8FA)

@@ -4,37 +4,11 @@ import android.content.Context
 import java.io.File
 
 /**
- * 一个角色说过的话，按章排好的索引。
- *
- * 为什么要有它：点进「他说过的话」那张纸，是把他的句子**全部**摊出来
- * （一个人几千句）。上一版每次组合都从头读 jsonl、解析、再按章归堆，
- * 一进纸就卡半秒；上下滑一下还再算一遍。
- *
- * 这里只在建句库那一次扫一遍，落成一个二进制索引：
- *
- * ```
- * i32  magic
- * i32  句数
- * then 每句 12 字节：i32 章号 | i32 章内偏移 | i32 文本偏移
- * i32  文本区长度
- * then 文本区（UTF-8，每句一段，不带长度前缀 —— 靠上面那三列切）
- * ```
- *
- * **文本偏移是字节偏移，不是字符下标。**
- * 第一版这里写的是 `StringBuilder.length`（字符下标），而读的时候拿它当字节位置去切
- * `ByteArray` —— 一个汉字占三字节，于是每句都从半个字中间开始切，
- * 屏幕上就是一串 `��`（用户报的「不明的符号」）。现在写进去之前先编码，
- * 累加的是真实字节数。
- *
- * 读的时候整块 mmap 成 ByteArray 再按需截串，比逐行解析快一个数量级。
+ * 一个角色说过的话，按章排好的索引。进纸只读这份，不再逐行解析 jsonl。
  */
 object LineIndex {
 
-    /*
-     * 第一版的索引是坏的（偏移算法见上）。改算法必须**换 magic**：
-     * 老文件读到 magic 对不上就当没有，退回逐行读 jsonl —— 那份一直是好的。
-     * 否则老索引还会被当成好的读出来，坏句子永远修不掉。
-     */
+    /* 第一版的索引是坏的（偏移算法见上）。 */
     private const val MAGIC = 0x4C4E4959 // LNIY（第二版）
     private const val REC = 12
     private const val CACHE = 3
@@ -66,12 +40,7 @@ object LineIndex {
         val dir = File(File(ctx.filesDir, "lines"), bookId).apply { mkdirs() }
         val out = File(dir, safe(name) + ".idx")
         val tmp = File(dir, out.name + ".part")
-        /*
-         * 先把文本编码成字节，再记每一句的**字节**起点。
-         *
-         * 用 StringBuilder.length 记的话，那是字符下标；汉字三字节一个，
-         * 偏移立刻对不上（见类注释）。
-         */
+        /* 先把文本编码成字节，再记每一句的字节起点。 */
         val body = java.io.ByteArrayOutputStream(1 shl 16)
         val tx = IntArray(list.size)
         list.forEachIndexed { i, q ->
@@ -99,12 +68,7 @@ object LineIndex {
     fun has(ctx: Context, bookId: String, name: String): Boolean =
         f(ctx, bookId, name).exists()
 
-    /**
-     * 旧版（坏的）索引一律作废。
-     *
-     * 读不到就当这本书这个人没有索引 —— 调用方退回读 jsonl，那份是对的。
-     * 顺手把坏文件删掉，下一次建库写新的。
-     */
+    /** 旧版（坏的）索引一律作废。读不到就当这本书这个人没有索引 —— 调用方退回读 jsonl，那份是对的。 */
     private fun stale(file: File): Boolean {
         val head = runCatching {
             java.io.DataInputStream(file.inputStream().buffered()).use { it.readInt() }
@@ -114,7 +78,6 @@ object LineIndex {
 
     /**
      * 读它。没有就 null —— 调用方退回读 jsonl（旧书、还没补扫的）。
-     *
      * @return (章号, 章内偏移, 文本) 三条对齐的数组
      */
     fun of(ctx: Context, bookId: String, name: String): Triple<IntArray, IntArray, Array<String>>? {
@@ -142,13 +105,7 @@ object LineIndex {
 
     private fun cut(body: ByteArray, from: Int): String {
         if (from < 0 || from >= body.size) return ""
-        /*
-         * 起点必须落在一个字的开头。
-         *
-         * UTF-8 里非 ASCII 的第一个字节是 110x/1110/11110，后续字节是 10xx。
-         * 万一偏移落在后续字节上（旧版索引就是这样），往前挪到下一个开头，
-         * 而不是把半个字解成一串 `�`。
-         */
+        /* 起点必须落在一个字的开头。UTF-8 里非 ASCII 的第一个字节是 110x/1110/11110，后续字节是 10xx。 */
         var s = from
         var guard = 0
         while (s < body.size && (body[s].toInt() and 0xC0) == 0x80 && guard++ < 4) s++

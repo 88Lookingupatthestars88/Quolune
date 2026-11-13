@@ -45,12 +45,7 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
-/**
- * 一本书的朗读源。
- *
- * 为什么不直接塞一个 List<List<Line>>：1550 章的书分完句能有几十万条，
- * 一次全建出来就是几百兆。所以章节按需取，读完一章才去要下一章。
- */
+/** 一本书的朗读源。为什么不直接塞一个 List<List<Line>>：1550 章的书分完句能有几十万条，一次全建出来就是几百兆。 */
 class Feed(
     val book: String,
     val count: Int,
@@ -60,19 +55,12 @@ class Feed(
     var rate: Int = 0,
     /**
      * 念到哪儿了。参数：章号、这一章里的第几个字。
-     *
-     * **必须挂在播放器上，不能只挂在阅读页上。**
-     * 阅读页一离开就被回收了，可声音还在后台念；睡眠定时也是后台到点停的。
-     * 「听完再打开显示的是刚开始听的位置」「定时停了不定位到最后」都是这个洞：
-     * 写进度那几行写在界面里，界面没了就没人写。
+     * 必须挂在播放器上，不能只挂在阅读页上。
      */
     val onPos: ((chapter: Int, offset: Int) -> Unit)? = null,
 )
 
-/**
- * 播放状态。UI 只读这一个对象。
- * chapter 是整本书里的章号，index 是当前章里的第几句。
- */
+/** 播放状态。UI 只读这一个对象。 */
 data class PlayState(
     val playing: Boolean = false,
     val loading: Boolean = false,
@@ -92,14 +80,7 @@ data class PlayState(
     val book: String = "",
 )
 
-/**
- * 朗读播放器。
- *
- * 结构是**边播边攒**：正在念第 i 句，后台已经按并发数在合成 i+1 … i+prefetch。
- * 一章念完自动进下一章，章与章之间不重建播放器、不退出前台。
- *
- * 取句、合成、重试全在 IO 线程；播放用 prepareAsync，不阻塞主线程。
- */
+/** 朗读播放器。结构是边播边攒：正在念第 i 句，后台已经按并发数在合成 i+1 … i+prefetch。 */
 class BookPlayer : Service() {
 
     companion object {
@@ -130,13 +111,7 @@ class BookPlayer : Service() {
             state.value = state.value.copy(error = msg)
         }
 
-        /**
-         * 把一句过场话撤掉。
-         *
-         * 错误条现在自己会走（四秒），但状态里那个字段还留着 ——
-         * 退出这一页再回来，同一句话又贴在头顶，看着像刚又出了一次事。
-         * 界面那边用完就调这个，把它清干净。
-         */
+        /** 把一句过场话撤掉。错误条现在自己会走（四秒），但状态里那个字段还留着 ——退出这一页再回来，同一句话又贴在头顶，看着像刚又出了一次事。 */
         fun forget() {
             val cur = state.value
             if (cur.error != null) state.value = cur.copy(error = null)
@@ -175,20 +150,9 @@ class BookPlayer : Service() {
 
     private val job = SupervisorJob()
 
-    /**
-     * 兜住「谁都没接住」的异常。
-     *
-     * 合成线程里有一处没包 runCatching 的调用炸了（取嗓子、段落判定、写账本），
-     * 异常会直冲默认处理器，界面还在，进程没了。
-     *
-     * 这里把栈写进 files/last-crash-player.txt，外置目录也放一份，不用 root 就能取；
-     * 同时把「断了」写进播放状态，界面能显示出来。
-     */
+    /** 兜住「谁都没接住」的异常。合成线程里有一处没包 runCatching 的调用炸了（取嗓子、段落判定、写账本），异常会直冲默认处理器。 */
     private val guard = CoroutineExceptionHandler { _, e ->
-        /*
-         * 取消不是崩溃。换书、换章、点停止都会 cancel 掉这一场，
-         * 正在 await 的地方会抛 CancellationException。放过，不写盘、不推到界面。
-         */
+        /* 取消不是崩溃。换书、换章、点停止都会 cancel 掉这一场，正在 await 的地方会抛 CancellationException。 */
         if (e is CancellationException) return@CoroutineExceptionHandler
         val stack = android.util.Log.getStackTraceString(e)
         runCatching { File(filesDir, "last-crash-player.txt").writeText(stack) }
@@ -208,10 +172,7 @@ class BookPlayer : Service() {
 
     private var feed: Feed? = null
 
-    /**
-     * 这一本书自己的读法，JSON。空 = 全跟定音。
-     * 每句都重新摊一遍，所以书内改了立刻生效，不用重开。
-     */
+    /** 这一本书自己的读法，JSON。 */
     @Volatile
     private var tuneJson: String = ""
 
@@ -243,23 +204,14 @@ class BookPlayer : Service() {
         super.onCreate()
         holder = this
         /*
-         * 通知通道必须先于一切建好。
-         *
-         * 顺序反过来的话，pending 里的一次 play() 抛异常，通道就永远建不出来；
-         * 接着 startForeground 拿一个不存在的通道挂通知，系统判成坏通知，
-         * 抛 RemoteServiceException 把进程干掉。这个异常是系统异步丢回主线程的，
-         * 包 runCatching 拦不住，只能在源头保证通知合法。
+         * 通知通道必须先于一切建好。顺序反过来的话，pending 里的一次 play() 抛异常。
+         * 这个异常是系统异步丢回主线程的，包 runCatching 拦不住，只能在源头保证通知合法。
          */
         ensureChannel()
         pending?.let { val act = it; pending = null; act(this) }
     }
 
-    /**
-     * 保证通知通道存在。
-     *
-     * 只在「没有」的时候建。已经有的不动 —— 用户自己调过的响铃、静音、横幅
-     * 是他的选择，不该被我们覆盖。
-     */
+    /** 保证通知通道存在。只在「没有」的时候建。 */
     private fun ensureChannel() {
         runCatching {
             val nm = getSystemService(NotificationManager::class.java) ?: return@runCatching
@@ -317,14 +269,7 @@ class BookPlayer : Service() {
             this, 0, Intent(this, Main::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        /*
-         * 小图标必须是**专门的通知图标**，不能拿桌面图标顶。
-         *
-         * 桌面那张是彩色的大图（mipmap 里的 PNG）。系统从 8.0 起要求小图标是
-         * 单色、带 alpha 的状态栏字形；拿桌面图当小图标，有些系统会判成
-         * 「坏通知」，startForeground 直接把进程带走。
-         * ic_stat_reading 是 24dp 基准的白柱图，五档密度都放了。
-         */
+        /* 小图标必须是专门的通知图标，不能拿桌面图标顶。 */
         val b = NotificationCompat.Builder(this, CH)
             .setChannelId(CH)
             .setSmallIcon(R.drawable.ic_stat_reading)
@@ -374,7 +319,7 @@ class BookPlayer : Service() {
         //
         // 只 gen++ 是不够的：正在放的那一段是 MediaPlayer 自己在走，
         // 新的一章还在合成，中间这一两秒里，耳朵里还是上一个故事。
-        // 用户说的「换了书还在念旧的」，就是这一段。
+        // 换书时先掐掉旧的这一路。
         runCatching { player?.stop() }
         runCatching { player?.release() }
         player = null
@@ -392,11 +337,7 @@ class BookPlayer : Service() {
         if (!cacheOnlyMode) goForeground()
         loop = scope.launch {
             runCatching { run(my, curCh, from.coerceAtLeast(0)) }.onFailure { e ->
-                /*
-                 * 取消不是崩溃，也不是「断了」。直接吞掉，不 rethrow：
-                 * 协程已在取消态，往外抛只会在某道 runCatching 边界上变成真异常，
-                 * 日志里也会多一堆 JobCancellationException，看着像崩了。
-                 */
+                /* 取消不是崩溃，也不是「断了」。 */
                 if (e is CancellationException) return@onFailure
                 val stack = android.util.Log.getStackTraceString(e)
                 runCatching { File(filesDir, "last-crash-player.txt").writeText(stack) }
@@ -429,12 +370,7 @@ class BookPlayer : Service() {
         }
     }
 
-    /**
-     * 把「念到哪儿」写出去。
-     *
-     * 节流 4 秒（念一句写一次文件没必要），换章、暂停、停下、销毁时强制写。
-     * 走 IO 线程，不占主线程。
-     */
+    /** 把「念到哪儿」写出去。节流 4 秒（念一句写一次文件没必要），换章、暂停、停下、销毁时强制写。 */
     private var lastPosAt = 0L
     private fun savePos(force: Boolean = false) {
         val f = feed ?: return
@@ -850,13 +786,7 @@ class BookPlayer : Service() {
 
     // ───────────────────────── 音色 ─────────────────────────
 
-    /**
-     * 这一句交给谁念。
-     *
-     * 关键：`all` 是开播那一刻抓的音色表。用户在音色页换了嗓子、或者在定音里
-     * 开关了引擎，这张表就过期了 —— 于是「选了正在用的音色，声音还是上一次的」。
-     * 所以先按当时的表找；找不到就按**现在**的设置重算一遍。
-     */
+    /** 这一句交给谁念。关键：all 是开播那一刻抓的音色表。 */
     private fun pickVoice(line: Line, s: Settings, all: List<Voice>): Voice {
         val named = line.voice.ifBlank { if (line.isDialog) s.defaultVoice else s.narratorVoice }
 

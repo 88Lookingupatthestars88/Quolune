@@ -45,6 +45,7 @@ import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.Paper
 import com.pagefold.reader.kit.PickChip
 import com.pagefold.reader.kit.T
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.voice.Voice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,9 +53,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * 一个人那张纸：上面是嗓子，下面是他这一辈子说过的话。
- *
- * 为什么合成一张：这两件事本来就是一个人的两面。分成两张纸，
- * 用户每次都得先想「这件事在哪个抽屉里」。
+ * 分成两张纸，用户每次都得先想「这件事在哪个抽屉里」。
  */
 @Composable
 internal fun PersonSheet2(
@@ -96,22 +95,11 @@ internal fun PersonSheet2(
     fun key(q: Quote): Long = q.ch.toLong() * 100_000_000L + q.at
 
     val byCh = remember(all) { all.groupBy { it.ch } }
-    /*
-     * 章签按**章节顺序**排，不按句数。
-     *
-     * 按句数降序的话，第 71 章那 8 句会排到第 30 章前头 —— 看到的是一张
-     * 「哪章话多」的排行榜，不是这个人在书里一路走下来的次序。
-     */
+    /* 章签按章节顺序排，不按句数。 */
     val chs = remember(byCh) { byCh.keys.sorted() }
     val shown = remember(all, chPick) { if (chPick < 0) all else all.filter { it.ch == chPick } }
 
-    /*
-     * 用 LazyColumn，不用 Column。
-     *
-     * 一个主角能有九千多句（《大秦》赵惊鸿 9333 句）。Column 会把九千行
-     * 一次全建出来 —— 点进这张纸要等好几秒，滚动也跟着卡。
-     * LazyColumn 只建看得见的那几行，几千句和几句一样快。
-     */
+    /* 用 LazyColumn，不用 Column。 */
     Paper(
         title = name + if (members.isEmpty()) "" else "（这一组 ${members.size + 1} 人）",
         onClose = onClose,
@@ -122,14 +110,7 @@ internal fun PersonSheet2(
         LazyColumn(Modifier.fillMaxSize()) {
             /* ── 嗓子 ── */
             item(key = "voice") {
-                /*
-                 * 嗓子这一行要够大。
-                 *
-                 * 上一版只有一行小字加一个「换」：进来先看见的是「他说过的话」，
-                 * 想换嗓子得先在那一行上找半天的「换」—— 用户的原话是
-                 * 「用户很难找到如何去更换音色」。现在左边写清「用的音色 + 名字」，
-                 * 右边一颗实心按钮，一眼就知道按哪儿。
-                 */
+                /* 嗓子这一行要够大，进来第一眼先看见它。 */
                 Row(
                     Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -188,16 +169,7 @@ internal fun PersonSheet2(
                         }
                     }
                 }
-                /*
-                 * 删掉这个人。
-                 *
-                 * 就在音色下面 —— 上一版把「删」只摆在「几个人并成一组」那条路上（组才有），
-                 * 单人点进来根本没有出口，用户说的「点进角色之后无法删除这个角色」就是它。
-                 *
-                 * 不弹二次确认：这张纸上一按就落盘的东西已经很多了（换嗓子、挑一句），
-                 * 唯独「删」要弹一次，等于告诉用户「这一下会坏」。真删错了，
-                 * 重新数他 / 从名单里加回来都还在。
-                 */
+                /* 删掉这个人。单人点进来也必须有这个出口。 */
                 Spacer(Modifier.height(6.dp))
                 Btn(
                     "删除这个角色", onDelete, BtnKind.DANGER,
@@ -270,18 +242,10 @@ internal fun PersonSheet2(
                             T(chName(chapters, q.ch), size = 10, color = s.flame)
                             Spacer(Modifier.height(2.dp))
                         }
-                        /*
-                         * 点这一行摊开两颗按钮，不直接跳走。
-                         *
-                         * 上一版是点一下就跳，人点错一格就出了这张纸，还得自己找回来。
-                         * 摊开之后「跳到书里」和「换个人说」摆在一起，选哪个都不冤。
-                         */
+                        /* 点这一行摊开两颗按钮，不直接跳走。 */
                         Row(
                             Modifier.fillMaxWidth()
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() }
-                                ) {
+                                .tap {
                                     if (sel.isNotEmpty()) {
                                         sel = if (on) sel - key(q) else sel + key(q)
                                     } else {
@@ -294,10 +258,7 @@ internal fun PersonSheet2(
                             Box(
                                 Modifier
                                     .width(20.dp)
-                                    .clickable(
-                                        indication = null,
-                                        interactionSource = remember { MutableInteractionSource() }
-                                    ) { sel = if (on) sel - key(q) else sel + key(q) }
+                                    .tap { sel = if (on) sel - key(q) else sel + key(q) }
                             ) {
                                 T(if (on) "✓" else "·", size = 11, color = if (on) s.flame else s.inkFaint)
                             }
@@ -392,15 +353,8 @@ internal fun chName(chapters: List<Chapter>, ch: Int): String {
 }
 
 /**
- * 「挑一个人」。
- *
- * 名单 = 这本书里数出来的所有人（[rowsOf]），不是「已经配过嗓子的角色表」。
- * 上一版只读 roles，一本只从书里数过人、没手动配过角色的书，这儿是空的 ——
- * 于是点名字签得到一句「这张表里还没有别人，先去添加角色」，等于把改一句话
- * 变成先去改整本书的名单。用户说的「显示要添加角色，但实际上并不合理」就是它。
- *
- * 表里真没有的名字，当场写一个也认：单句改派是按位置记的，不要求那个人
- * 先在名单里。写进来的名字会和别处一样，只影响这一句。
+ * 「挑一个人」。名单 = 这本书里数出来的所有人（[rowsOf]），不是「已经配过嗓子的角色表」。
+ * 表里真没有的名字，当场写一个也认：单句改派是按位置记的，不要求那个人先在名单里。
  */
 @Composable
 internal fun PickWho(
@@ -444,10 +398,7 @@ internal fun PickWho(
                 val hit = n == current
                 Row(
                     Modifier.fillMaxWidth()
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onPick(n) }
+                        .tap { onPick(n) }
                         .padding(vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -485,7 +436,6 @@ internal fun PickWho(
 
 /**
  * 台账：这本书里，按章按顺序，每一句是谁说的。
- *
  * 跟「他的话」那张纸是同一份数据的两个看法 —— 一个按人，一个按顺序。
  */
 @Composable
@@ -502,23 +452,13 @@ internal fun LedgerSheet(
     onClose: () -> Unit,
 ) {
     val s = LocalSkin.current
-    /*
-     * 从哪一章开始看。
-     *
-     * 用户是从派角页点进来的，那时他正在读某一章 —— 台账一开就停在第 1 章、
-     * 还得自己翻回去，这不叫「按顺序通看」。
-     */
+    /* 从哪一章开始看。用户是从派角页点进来的，那时他正在读某一章 —— 台账一开就停在第 1 章、还得自己翻回去，这不叫「按顺序通看」。 */
     var ch by remember(bookId) { mutableStateOf(startCh.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))) }
     var rows by remember(bookId) { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
     var busy by remember(bookId) { mutableStateOf(false) }
     var fixing by remember { mutableStateOf<Int?>(null) }
 
-    /*
-     * 章一换就去切**这一章**的对白归属。一章几千字，几十毫秒。
-     *
-     * 不预取下一章：翻到哪章生成哪章。翻得快的时候上一次的结果还没回来，
-     * 用 ch 收尾就丢掉，不会出现「第 3 章的画面写着第 2 章的人」。
-     */
+    /* 章一换就去切这一章的对白归属。 */
     LaunchedEffect(bookId, ch) {
         if (bookId.isBlank()) return@LaunchedEffect
         busy = true
@@ -542,12 +482,7 @@ internal fun LedgerSheet(
         bookId.isNotBlank() && runCatching { app.shelf.hasIndex(bookId) }.getOrDefault(false)
     }
 
-    /*
-     * 台账也用 LazyColumn。
-     *
-     * 一章可能上千句对白（五十万字一章的书），Column 会把它们一次全建出来。
-     * LazyColumn 只建看得见的那几行。
-     */
+    /* 台账也用 LazyColumn。 */
     Paper(
         title = "这本书里谁在说话",
         onClose = onClose,
@@ -559,12 +494,7 @@ internal fun LedgerSheet(
             T("从书里进来才有这一页。", size = 11, color = s.inkFaint)
             return@Paper
         }
-        /*
-         * 翻章：两条路都给。
-         *
-         * 一是左右那两颗；二是**左右划** —— 一段一段往下看的人，手指不会去够角上
-         * 那两颗小按钮。上一版只有按钮能换章，所以「滑到下一章就完全不会自动标出来」。
-         */
+        /* 翻章：两条路都给。一是左右那两颗；二是左右划 —— 一段一段往下看的人，手指不会去够角上那两颗小按钮。 */
         Row(
             Modifier.fillMaxWidth()
                 .pointerInput(chapters.size) {
@@ -603,10 +533,7 @@ internal fun LedgerSheet(
                 Column(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.fillMaxWidth()
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { fixing = at }
+                            .tap { fixing = at }
                             .padding(vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -686,14 +613,7 @@ private fun profOf(app: App, bookId: String): CastProfile {
     )
 }
 
-/**
- * 给一个人补扫他的句子。
- *
- * 用户手写一个名字进来，句数是 0 —— 那不叫「这个人没说过话」，那叫「还没数过」。
- * 这里按名字在全书跑一遍，把他的话补进句库，顺手把他那一格句数改掉。
- *
- * 跑在 IO 线程上，回来在调用方那个（主）线程回调。
- */
+/** 给一个人补扫他的句子。用户手写一个名字进来，句数是 0 —— 那不叫「这个人没说过话」，那叫「还没数过」。 */
 internal fun App.countsRead(bookId: String, name: String, done: (Int) -> Unit) {
     if (bookId.isBlank()) { done(0); return }
     kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()).launch {

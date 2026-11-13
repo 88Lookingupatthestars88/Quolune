@@ -111,6 +111,7 @@ import com.pagefold.reader.kit.SegBar
 import com.pagefold.reader.kit.Skin
 import com.pagefold.reader.kit.Sz
 import com.pagefold.reader.kit.ThemeId
+import com.pagefold.reader.kit.tap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -198,12 +199,7 @@ private fun TuneScreen(
 
     fun relist() {
         val ledger = app.synth.ledger()
-        /*
-         * 段落那两行账，按**账本**算，不按目录算。
-         *
-         * 数字取自账本，不扫目录：扫目录会把没登记的文件也算进去，
-         * 那几条在库里既列不出来也删不掉，两边数就对不上。
-         */
+        /* 段落那两行账，按账本算，不按目录算。 */
         val read = ledger.filterNot { it.trial }
         audioBytes = read.sumOf { app.synth.sizeOf(it.key, it.ext) }
         audioCount = read.size
@@ -220,38 +216,34 @@ private fun TuneScreen(
         bgBytes = bb; bgCount = bn
     }
 
+    /* 数账。enginesJson 每敲一个字就变一次，直接跟着它跑就是每敲一下全盘扫一遍：账本里的每一段都要 File.length()。 */
     LaunchedEffect(s.enginesJson) {
-        /*
-         * 数账这一趟出什么事都不能把这一页带走。
-         *
-         * 定音是唯一能配嗓子、能填钥匙的地方，它一闪退，整个应用就等于废了。
-         * 数不出来就少几行数字，别让人连门都进不去。
-         */
+        delay(400)
         val bad = withContext(Dispatchers.IO) { runCatching { relist() }.exceptionOrNull() }
         if (bad != null) {
             msg = "库房那几行没数出来：" + (bad.message ?: bad.javaClass.simpleName)
         }
     }
 
+    /* 存图、缩图在 IO 上，这段空档按钮写「正在放…」。 */
+    var piecing by remember { mutableStateOf(false) }
     val imgPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val page = pickFor
-        pickFor = null
         if (uri == null || page == null) return@rememberLauncherForActivityResult
+        piecing = true
         scope.launch {
             val v = Bg.take(app, page, uri)
+            piecing = false
             if (v != null) {
                 app.field.edit { it.withBg(page, v) }
                 relist()
-                toBg(page)
             } else {
                 msg = "这张读不出来，换一张"
             }
         }
     }
 
-    /*
-     * 崩过才有的记录。读在列表外面 —— 列表 DSL 里不是可组合作用域，拿不到 remember。
-     */
+    /* 崩过才有的记录。读在列表外面 —— 列表 DSL 里不是可组合作用域，拿不到 remember。 */
     val crashTxt = remember(app) {
         runCatching {
             listOf("last-crash.txt", "last-crash-player.txt")
@@ -347,11 +339,7 @@ private fun TuneScreen(
             // 目前只给派角用一次 —— 让它把名单分成组、每组派一副嗓子。
             item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 22.dp)) }
             item { Chapter("接口") }
-            /*
-             * 这行字回答「这一节跟上面那七家有什么区别」——上面是把字念成声音，
-             * 这里是「替人拿主意」，而且只服务派角那一件事。不写清楚，用户会以为
-             * 填了这里念书就换嗓子了。
-             */
+            /* 这行字回答「这一节跟上面那七家有什么区别」——上面是把字念成声音，这里是「替人拿主意」，而且只服务派角那一件事。 */
             item {
                 Box(Modifier.padding(horizontal = Sz.gutter).padding(bottom = 10.dp)) {
                     Text(
@@ -648,13 +636,7 @@ private fun TuneScreen(
                 }
             }
 
-            /*
-             * 只有真崩过才出现的一节。
-             *
-             * 崩了以后栈写在 files/last-crash.txt（合成线程的是 last-crash-player.txt），
-             * 内部目录要 root 才看得到。这里直接摊在界面上，一条「复制」，
-             * 粘给谁都能定位 —— 不用再靠「你再复现一次我猜猜」。
-             */
+            /* 只有真崩过才出现的一节。崩了以后栈写在 files/last-crash.txt（合成线程的是 last-crash-player.txt。 */
             if (crashTxt.isNotBlank()) {
                 item { Chapter("上一回崩在这儿") }
                 item {
@@ -700,6 +682,7 @@ private fun TuneScreen(
             BgSheet(
                 page = page,
                 current = s.bg(page),
+                busy = piecing,
                 skin = skin,
                 onClose = { pickFor = null },
                 onPick = { imgPicker.launch(arrayOf("image/*")) },
@@ -818,7 +801,7 @@ private fun SkinCard(t: ThemeId, on: Boolean, dark: Boolean, onClick: () -> Unit
                 .clip(RoundedCornerShape(p.rCard))
                 .background(p.ground)
                 .border(if (on) 2.dp else 1.dp, border, RoundedCornerShape(p.rCard))
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+                .tap { onClick() }
         ) {
             Column(Modifier.padding(10.dp)) {
                 Box(Modifier.width(20.dp).height(3.dp).background(p.flame, RoundedCornerShape(2.dp)))
@@ -858,9 +841,17 @@ private fun SkinCard(t: ThemeId, on: Boolean, dark: Boolean, onClick: () -> Unit
 @Composable
 private fun BgCell(page: String, name: String, value: String, skin: Skin, onPick: (String) -> Unit) {
     val spec = BgSpec.decode(value)
+    /* 空态那圈光。定音一滚就重组，别每次新建一个 Brush。 */
+    val emptyBrush = remember(skin.ground, skin.spotA) {
+        androidx.compose.ui.graphics.Brush.radialGradient(
+            listOf(skin.spotA.copy(alpha = 0.75f), skin.ground),
+            center = androidx.compose.ui.geometry.Offset(18f, 14f),
+            radius = 130f
+        )
+    }
     Column(
         Modifier.width(60.dp)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onPick(page) }
+            .tap { onPick(page) }
     ) {
         Box(
             Modifier.size(60.dp, 82.dp)
@@ -880,15 +871,7 @@ private fun BgCell(page: String, name: String, value: String, skin: Skin, onPick
                         .size(5.dp).clip(CircleShape).background(skin.flame)
                 )
             } else {
-                Box(
-                    Modifier.fillMaxSize().background(
-                        androidx.compose.ui.graphics.Brush.radialGradient(
-                            listOf(skin.spotA.copy(alpha = 0.75f), skin.ground),
-                            center = androidx.compose.ui.geometry.Offset(18f, 14f),
-                            radius = 130f
-                        )
-                    )
-                )
+                Box(Modifier.fillMaxSize().background(emptyBrush))
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -900,6 +883,7 @@ private fun BgCell(page: String, name: String, value: String, skin: Skin, onPick
 private fun BgSheet(
     page: String,
     current: String,
+    busy: Boolean,
     skin: Skin,
     onClose: () -> Unit,
     onPick: () -> Unit,
@@ -907,12 +891,7 @@ private fun BgSheet(
     onTheme: () -> Unit,
 ) {
     val spec = BgSpec.decode(current)
-    /*
-     * 预览格的高度跟着屏幕走。
-     *
-     * 写死 190 的时候，屏幕矮一档（或者系统字体调大）这张纸的固定高度就超过了
-     * 能用的那截，红按钮被裁在屏幕外，往下又滑不动。
-     */
+    /* 预览格的高度跟着屏幕走。写死 190 的时候，屏幕矮一档（或者系统字体调大）这张纸的固定高度就超过了能用的那截，红按钮被裁在屏幕外。 */
     val previewH = (LocalConfiguration.current.screenHeightDp * 0.26f).coerceIn(110f, 190f).dp
     Overlay(onClose) {
         Column(
@@ -960,7 +939,11 @@ private fun BgSheet(
             Spacer(Modifier.height(16.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Btn(
-                    if (spec == null) "挑一张图" else "换一张",
+                    when {
+                        busy -> "正在放…"
+                        spec == null -> "挑一张图"
+                        else -> "换一张"
+                    },
                     onPick, BtnKind.PRIMARY,
                     modifier = Modifier.weight(1f)
                 )
@@ -1009,7 +992,7 @@ private fun BgEditorScreen(page: String, s: Settings, app: App, onBack: () -> Un
         ) {
             Box(
                 Modifier.clip(RoundedCornerShape(20.dp)).background(Color.Black.copy(alpha = 0.45f))
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onBack() }
+                    .tap { onBack() }
                     .padding(horizontal = 14.dp, vertical = 9.dp)
             ) {
                 Text("不要了", fontSize = 13.sp, color = Color.White)
@@ -1076,10 +1059,7 @@ private fun Sample(s: Settings) {
         "他说这话时没抬头，手里的炭笔也没停。",
         "桌上摊着半张舆图，朱线断在雁门关外。",
     )
-    /*
-     * 样张里的段间距必须跟正文那套算法一字不差：正文那条空行的高度**就是**
-     * paraGap（sp），0 就贴住。差着算，样张就成了骗人的。
-     */
+    /* 样张里的段间距必须跟正文那套算法一字不差：正文那条空行的高度就是paraGap（sp），0 就贴住。 */
     val gap = s.paraGap.coerceIn(0, 40)
     val gapDp = with(LocalDensity.current) { gap.sp.toDp() }
     Box(
@@ -1133,12 +1113,7 @@ private fun VoiceBlock(
     var base by remember(e.id) { mutableStateOf(e.base ?: "") }
     var key by remember(e.id) { mutableStateOf(e.key ?: "") }
     var model by remember(e.id) { mutableStateOf(e.model ?: "") }
-    /*
-     * 造嗓音、复刻嗓音各用哪个模型。
-     *
-     * 只有小米这一家分得开：它三个口子要三个不同模型，而且填串了不报错，只静默降级。
-     * 别的家这两格留着不显示，值原样带回去，不会因为改了名字就被抹掉。
-     */
+    /* 造嗓音、复刻嗓音各用哪个模型。 */
     var design by remember(e.id) { mutableStateOf(e.modelDesign ?: "") }
     var clone by remember(e.id) { mutableStateOf(e.modelClone ?: "") }
     var voices by remember(e.id) { mutableStateOf(e.voices ?: "") }
@@ -1147,27 +1122,13 @@ private fun VoiceBlock(
 
     /*
      * 改完就验，结果写在这一行的副标题上。
-     *
-     * 验的办法是真发两个字过去（[Speak.probe] / [Speak.probeMimo]）：这几家的模型清单
-     * 里没有「这是朗读的还是听写的」这一项，按名字猜一定猜错。
-     *
-     * 四样东西（协议、地址、钥匙、模型）算一个签名，验过的结论落盘。一样没变就直接
-     * 摆上一次的结果，不发请求 —— 定音页是常来的地方，不该每次进来都等一会儿。
-     *
-     * 手指停下 0.7 秒才发，边打字边发是白烧请求；验的过程不改他填的任何一格。
+     * 一样没变就直接摆上一次的结果，不发请求 —— 定音页是常来的地方，不该每次进来都等一会儿。
      */
     var verdict by remember(e.id) { mutableStateOf<String?>(null) }
     var trying by remember(e.id) { mutableStateOf(false) }
     val vScope = rememberCoroutineScope()
 
-    /*
-     * 进来**不再自己发请求**。
-     *
-     * 定音一页七家，每家一次验、一次要清单，进一次就是十几个请求同时出去 ——
-     * 页面在这一串里发木，用户的话是「一进入就要重新获取」。
-     * 现在只摆**已经验过**的结论（结论落盘，四样没变就一直在），
-     * 想重验按那一行右边的「验」。改完格子不动手，也不会偷偷花他的钱。
-     */
+    /* 进来不再自己发请求。定音一页七家，每家一次验、一次要清单，进一次就是十几个请求同时出去 ——页面在这一串里发木。 */
     LaunchedEffect(e.id, e.model, e.key, e.base, e.on, e.protocol) {
         verdict = null
         if (!e.on) return@LaunchedEffect
@@ -1202,16 +1163,7 @@ private fun VoiceBlock(
         }
     }
 
-    /*
-     * 一进这一页、或者钥匙一变，就去要这家的模型清单。
-     *
-     * 拉回来**原样全列**。这几家的清单里没有「这是朗读模型」这一项，
-     * 本地怎么猜都会猜错：`mimo-v2.5-tts-voiceclone` 也带 tts，`-asr` 也带 voice。
-     * 藏错一条比列错一条更糟 —— 用户会觉得这家根本没好模型。
-     *
-     * 拉不到就什么都不显示，让格子空着由人自己填。
-     * 火山没有清单端点，也走这条路。
-     */
+    /* 一进这一页、或者钥匙一变，就去要这家的模型清单。 */
     LaunchedEffect(e.id, e.key, e.base, e.proto, e.on) {
         val k = e.key ?: ""
         if (k.isBlank() || !e.on) { fetched = emptyList(); return@LaunchedEffect }
@@ -1234,10 +1186,7 @@ private fun VoiceBlock(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     verdict ?: note, fontSize = 10.sp,
-                    /*
-                     * 三种颜色，三种意思：平时是灰的，测试中是淡的，念不出来才是红的。
-                     * 只有「念不出来」才刷红。「正在测试中」是中间态，刷红像出了事。
-                     */
+                    /* 三种颜色，三种意思：平时是灰的，测试中是淡的，念不出来才是红的。 */
                     color = when {
                         verdict == null -> s.inkFaint
                         verdict == "正在测试中" -> s.inkDim
@@ -1247,13 +1196,7 @@ private fun VoiceBlock(
                     maxLines = 1,
                 )
             }
-            /*
-             * 「验」。按一下才发一次。
-             *
-             * 进来就自己发的话，七家一起出去，页面在这一串里发木；
-             * 而且有的家按字算钱，不打招呼就花掉是不对的。
-             * 只在「开着、有钥匙、不是离线那两家」时才出现 —— 别的按了也没意义。
-             */
+            /* 「验」。按一下才发一次。进来就自己发的话，七家一起出去，页面在这一串里发木；而且有的家按字算钱，不打招呼就花掉是不对的。 */
             if (e.on && !e.key.isNullOrBlank() && e.protocol != "system") {
                 Text(
                     if (trying) "…" else "验",
@@ -1261,10 +1204,7 @@ private fun VoiceBlock(
                     color = if (trying) s.inkFaint else s.inkDim,
                     modifier = Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { tryProbe() }
+                        .tap { tryProbe() }
                         .padding(horizontal = 9.dp, vertical = 5.dp)
                 )
             }
@@ -1273,10 +1213,7 @@ private fun VoiceBlock(
                 Box(
                     Modifier.size(30.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onDrop() },
+                        .tap { onDrop() },
                     contentAlignment = Alignment.Center
                 ) {
                     Text("×", fontSize = 17.sp, color = s.inkFaint)
@@ -1291,12 +1228,7 @@ private fun VoiceBlock(
 
         Spacer(Modifier.height(4.dp))
 
-        /*
-         * 改一格，整副配置重新交上去。
-         *
-         * 整副配置只从这一个出口交上去。改成三格模型之后，各处自己拼 e.copy(…)
-         * 漏一格就把那一格抹掉。
-         */
+        /* 改一格，整副配置重新交上去。 */
         fun push() = onEdit(
             e.copy(
                 name = name.ifBlank { e.name },
@@ -1313,16 +1245,7 @@ private fun VoiceBlock(
         InlineField("接口地址", base, { base = it; push() }, "https://…")
         InlineField("钥匙", key, { key = it; push() }, "sk-…", secret = true, sanitize = Auth::clean)
 
-        /*
-         * 模型。清单全部照列，一条不筛。
-         *
-         * 填了钥匙就当场去要：要到了，这家的模型一个不落摆出来；要不到（没这个端点、
-         * 或者钥匙不对）就只留一个空框，自己填。
-         *
-         * 小米这一家分三格 —— 朗读、造嗓音、复刻嗓音各要一个模型，
-         * 而且填串了它不报错，只拿默认声音念，所以只能在界面上分开摆。
-         * 别的家只有朗读这一路，仍是一格。
-         */
+        /* 模型。清单全部照列，一条不筛。 */
         if (e.protocol == "mimo") {
             InlineField("朗读模型", model, { model = it; push() }, "")
             Chips(fetched.filter { it.contains("tts") && !it.contains("design") && !it.contains("clone") }, model) {
@@ -1335,36 +1258,13 @@ private fun VoiceBlock(
             InlineField("克隆模型", clone, { clone = it; push() }, "")
             Chips(fetched.filter { it.contains("clone") }, clone) { clone = it; push() }
         } else {
-            /*
-             * 能复刻的那几家（硅基、MiniMax）也分两格。
-             *
-             * 它们是一把钥匙，但两个口：念书走 audio/speech，复刻走另一条上传口，
-             * 而且上传那边只认某一个模型。填串了不会报错，只会复刻出来不像 ——
-             * 和朗读模型摆在同一格，用户永远不知道自己改的是哪一口。
-             */
-            /*
-             * 朗读模型：清单里那些「一定不念书」的不摆出来。
-             *
-             * `?type=audio` 拉回来的是这一整类，识别模型（ASR / SenseVoice / Whisper /
-             * 说话人分离）和合成模型混在一排里，长得一样。用户按名字猜不出来，
-             * 点中一个识别模型，卡片从此写「还没填音色」，播放一个字都没有。
-             *
-             * 只挡「一定不是」的，拿不准的照旧摆着 —— 由对面的响应去说。
-             * 当前已经填着的那个永远留着，否则选错了连改都不知道改哪一个。
-             */
+            /* 能复刻的那几家（硅基、MiniMax）也分两格。 */
+            /* 朗读模型：清单里那些「一定不念书」的不摆出来。 */
             InlineField("朗读模型", model, { model = it; push() }, "")
             Chips(fetched.filter { !Why.notSpeech(it) || it == model }, model) { model = it; push() }
 
             if (com.pagefold.reader.field.Presets.cloneFor(e.base ?: "", e.protocol).isNotEmpty()) {
-                /*
-                 * 克隆模型：**这一格不是从清单里挑，是从这家认的那一个里挑。**
-                 *
-                 * 上传样本的那个口只收某一个模型（硅基只认 CosyVoice2，MiniMax 只认
-                 * speech-02-hd）。清单里根本没有名字带 clone 的，拿清单去过滤，
-                 * 结果就是一个都没有 —— 用户看到的是「这一格空的，没法选」。
-                 *
-                 * 所以先把这家真正认的摆出来，再补上清单里像样的同类。
-                 */
+                /* 克隆模型：这一格不是从清单里挑，是从这家认的那一个里挑。 */
                 val can = com.pagefold.reader.field.Presets.cloneFor(e.base ?: "", e.protocol)
                 InlineField("克隆模型", clone, { clone = it; push() }, "")
                 Chips(
@@ -1377,21 +1277,12 @@ private fun VoiceBlock(
             }
         }
 
-        /*
-         * 音色**不在这儿挑** —— 它在音色页。这里只把值原样往下传，免得冲掉已有配置。
-         */
+        /* 音色不在这儿挑 —— 它在音色页。 */
     }
 }
 
 /**
- * 「这家有哪些模型」—— 进程级的一份备忘。
- *
- * 为什么要挪出这一行：定音是 LazyColumn，滚出屏幕的那段会被丢掉，滚回来是重新组合，
- * `remember` 里的东西一律从零开始。清单放在行内，等于每滑一次重新要一次，
- * 还得重新等 0.8 秒。用户说的「不要每次一滑动，它就重新拉取一次」就是它。
- *
- * 键是「地址 + 钥匙」。换一把钥匙当然要重新问；同一把钥匙滚进滚出、退出定音再进来，
- * 都是现成的。跟声源那边「验过的结论记着」是同一个路子。
+ * 「这家有哪些模型」的进程级备忘，键是地址 + 钥匙，滚动不重拉。
  */
 private object ChatMemo {
     private val mem = HashMap<String, List<String>>()
@@ -1400,10 +1291,7 @@ private object ChatMemo {
 
     /**
      * 落一份在 files/chat-models.json —— 跟声源那份 models.json 是同一个路子。
-     *
-     * 不落盘的话，进程一重启就全忘：再进定音又去要一遍，用户看到的就是
-     * 「每次进来都重新拉」。空了也要记（空表就是「问过了，这家没给」），
-     * 不然那家连着失败，每进一次页面就撞一次墙。
+     * 不落盘的话，进程一重启就全忘：再进定音又去要一遍，用户看到的就是「每次进来都重新拉」。
      */
     fun attach(app: android.content.Context) {
         if (file == null) file = java.io.File(app.filesDir, "chat-models.json")
@@ -1439,13 +1327,7 @@ private object ChatMemo {
     }
 }
 
-/**
- * 接口那一行。比嗓源少两件事：不用选音色，也没有协议 —— 都是 OpenAI 兼容口。
- *
- * 「拉清单」和「测一下」两个动作分开：
- * 拉清单是把「这家有哪些模型」拿回来，测一下是「这个模型答不答得上话」。
- * 合成后一次请求按字计费，所以不自动发，按一下才发。
- */
+/** 接口那一行。比嗓源少两件事：不用选音色，也没有协议 —— 都是 OpenAI 兼容口。 */
 @Composable
 private fun ChatBlock(
     e: com.pagefold.reader.voice.ChatCfg,
@@ -1458,13 +1340,7 @@ private fun ChatBlock(
     var base by remember(e.id) { mutableStateOf(e.base ?: "") }
     var key by remember(e.id) { mutableStateOf(e.key ?: "") }
     var model by remember(e.id) { mutableStateOf(e.model ?: "") }
-    /*
-     * 这一格是「地址 + 钥匙」问来的清单。
-     *
-     * 进来先摆盘上那份（`chat-models.json`），一个请求都不发 —— 跟声源那边一样。
-     * 只有**从来没问过**这一对，才自己去要一次；要过之后就一直摆着，包括问空了。
-     * 想重问按「刷新清单」，那颗按钮一直都在。
-     */
+    /* 这一格是「地址 + 钥匙」问来的清单。 */
     ChatMemo.attach(app)
     val sigKey = ChatMemo.sig(e)
     var fetched by remember(e.id) { mutableStateOf(ChatMemo.get(sigKey).orEmpty()) }
@@ -1497,25 +1373,14 @@ private fun ChatBlock(
         }
     }
 
-    /*
-     * 进来只做一件事：把盘上那份摆出来。
-     *
-     * 只有「这一对地址 + 钥匙从来没问过」才真去要一次 —— 要回来就落盘，之后
-     * 无论进来多少次、滚出去滚回来，都不再发请求。跟声源那边一模一样。
-     * 想重新问，按模型底下那颗「刷新清单」。
-     */
+    /* 进来只做一件事：把盘上那份摆出来。 */
     LaunchedEffect(sigKey, e.on) {
         fetched = ChatMemo.get(sigKey).orEmpty()
         if (!e.on) return@LaunchedEffect
         val k = key.trim()
         if (k.isBlank() || Auth.why(k) != null) return@LaunchedEffect
         if (ChatMemo.knows(sigKey)) { autoPick(fetched); return@LaunchedEffect }
-        /*
-         * 手指停下 0.8 秒才去要。
-         *
-         * 每敲一个字都重来一次的话，粘一把钥匙就是一串请求 —— 有的家按次计费，
-         * 而且中途那几个残缺的钥匙会连着回 401，界面上看着像「这把钥匙不对」。
-         */
+        /* 手指停下 0.8 秒才去要。 */
         kotlinx.coroutines.delay(800)
         pulling = true
         val got = com.pagefold.reader.voice.Chat.models(
@@ -1575,16 +1440,14 @@ private fun ChatBlock(
                     color = if (busy) s.inkFaint else s.inkDim,
                     modifier = Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) {
-                            if (busy) return@clickable
-                            busy = true
-                            verdict = null
-                            scope.launch {
-                                verdict = com.pagefold.reader.voice.Chat.hello(e.copy(model = model))
-                                busy = false
+                        .tap {
+                            if (!busy) {
+                                busy = true
+                                verdict = null
+                                scope.launch {
+                                    verdict = com.pagefold.reader.voice.Chat.hello(e.copy(model = model))
+                                    busy = false
+                                }
                             }
                         }
                         .padding(horizontal = 9.dp, vertical = 5.dp)
@@ -1604,10 +1467,8 @@ private fun ChatBlock(
             Chips(fetched.take(40), model) { model = it; push() }
         }
         /*
-         * 「刷新清单」一直都在。
-         *
-         * 清单是问过就摆着、不再自己重问的（跟声源一样）。那家的模型换了、或者
-         * 上一次恰好没连上，总得有个地方能按一下 —— 不然又回到「只能杀进程」。
+         * 「刷新清单」一直都在。清单是问过就摆着、不再自己重问的（跟声源一样）。
+         * 那家的模型换了、或者上一次恰好没连上，总得有个地方能按一下 —— 不然又回到「只能杀进程」。
          */
         if (key.isNotBlank() && Auth.why(key) == null) {
             Row(
@@ -1625,10 +1486,7 @@ private fun ChatBlock(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .border(1.dp, s.hairSoft, RoundedCornerShape(8.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { repull() }
+                        .tap { repull() }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 )
                 if (fetched.isEmpty() && !pulling) {
@@ -1645,7 +1503,6 @@ private fun ChatBlock(
 
 /**
  * 一排可选的字。点一下就换成那个。
- *
  * @param multi  true = 多选（音色那一栏用），点一下加、再点一下去掉
  * @param picked 多选时当前选中的
  */
@@ -1661,17 +1518,21 @@ private fun Chips(
     val s = LocalSkin.current
     if (options.isEmpty()) return
     /*
-     * 换行排，不横滚。
-     *
-     * 用自动换行，不用横滑：横滑一下就看不出后面还有几条，像只有前面几个可选。
-     * 用户要的是「把主要的模型列出来」，那就全摆出来，一行放不下就折行。
+     * 换行排，不横滚：横滑看不出后面还有几条。
+     * 全铺进 FlowRow，每次测量都要量几百个子项 —— 定音一滚就掉帧。
      */
+    val head = remember(options, current) {
+        if (current.isBlank() || options.indexOf(current) < 0) options
+        else listOf(current) + options.filter { it != current }
+    }
+    var open by remember(options.size) { mutableStateOf(false) }
+    val shown = if (open || head.size <= CAP_CHIPS) head else head.take(CAP_CHIPS)
     FlowRow(
         Modifier.fillMaxWidth().padding(top = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
         verticalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        options.forEach { o ->
+        shown.forEach { o ->
             val on = if (multi) picked.contains(o) else o == current
             Text(
                 o,
@@ -1682,22 +1543,30 @@ private fun Chips(
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (on) s.flameGhost else Color.Transparent)
                     .border(1.dp, if (on) s.flame.copy(alpha = 0.4f) else s.hairSoft, RoundedCornerShape(8.dp))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { onPick(o) }
+                    .tap { onPick(o) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            )
+        }
+        if (!open && head.size > CAP_CHIPS) {
+            Text(
+                "还有 ${head.size - CAP_CHIPS} 个",
+                fontSize = 11.sp,
+                color = s.inkFaint,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .tap { open = true }
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             )
         }
     }
 }
 
+/** 一行里先摆几个。再多就折起来 —— 见 [Chips]。 */
+private const val CAP_CHIPS = 12
+
 /**
  * 一行可编辑的字。
- *
  * @param secret true = 默认盖住（钥匙那一格用）。右边一只眼睛，点一下才看得见。
- *   盖住时真的转成圆点 —— 不是靠颜色糊过去：截屏、录屏、旁边有人看，
- *   画面里就只有一串点。
  */
 @Composable
 private fun InlineField(
@@ -1711,17 +1580,7 @@ private fun InlineField(
     sanitize: ((String) -> String)? = null,
 ) {
     val s = LocalSkin.current
-    /*
-     * 钥匙默认是盖住的。
-     *
-     * 一进这一页就能看见整串 key，等于谁凑过来都能抄走 —— 截屏、录屏、
-     * 旁边站着人，全露着。所以默认只显示一串圆点，右边一只眼睛，
-     * 自己想看才点开，看完再点回去。
-     *
-     * 但**不用 Password 键盘**（KeyboardType.Password）：那会把手机的
-     * 安全输入法叫起来，部分 ROM 还会顺带禁掉截屏。这里只是把显示的字符
-     * 换成圆点，输入本身还是普通键盘。
-     */
+    /* 钥匙默认是盖住的。一进这一页就能看见整串 key，等于谁凑过来都能抄走 —— 截屏、录屏、旁边站着人，全露着。 */
     var open by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().padding(vertical = 6.dp),
@@ -1746,10 +1605,7 @@ private fun InlineField(
         if (secret) {
             Box(
                 Modifier.size(26.dp).clip(RoundedCornerShape(8.dp))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { open = !open },
+                    .tap { open = !open },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -1774,7 +1630,7 @@ private fun VaultRow(name: String, amount: String, note: String, onClick: () -> 
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1845,7 +1701,7 @@ internal fun NavLine(title: String, sub: String, onClick: () -> Unit) {
     val s = LocalSkin.current
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1860,12 +1716,7 @@ internal fun NavLine(title: String, sub: String, onClick: () -> Unit) {
     }
 }
 
-/**
- * 准它用哪几副嗓子。
- *
- * 「一副不给」必须存得下来 —— 空白既表示「全给」，把最后一副点掉就会自己全亮回来。
- * 记号在 [com.pagefold.reader.field.AI_NO_VOICE]。
- */
+/** 准它用哪几副嗓子。「一副不给」必须存得下来 —— 空白既表示「全给」，把最后一副点掉就会自己全亮回来。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
@@ -1910,37 +1761,17 @@ private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
     }
 }
 
-/**
- * 发给它的那段话。
- *
- * 名单和返回格式不在这儿 —— 那两段是接口约定，改了整份结果就解析不出来。
- * 这儿只放「怎么分」的口径：先挑现成的、主角要各有各的、配角可以合。
- */
+/** 发给它的那段话。名单和返回格式不在这儿 —— 那两段是接口约定，改了整份结果就解析不出来。 */
 @Composable
 private fun AiAskField(s: Settings, app: App, say: (String) -> Unit) {
     val skin = LocalSkin.current
-    /*
-     * 初值只取一次。
-     *
-     * 写成 `remember(s.aiPrompt)` 的话，每敲一个字都改一次设置 → key 变 → 状态重建，
-     * 中文输入法正在拼的那一截会被打断（「打字打一半字没了」）。
-     * 这一格是唯一的数据源，别处要改它就重进这一页。
-     */
+    /* 初值只取一次。写成 remember(s.aiPrompt) 的话，每敲一个字都改一次设置 → key 变 → 状态重建。 */
     var text by remember { mutableStateOf(s.aiPrompt) }
 
     Column(Modifier.padding(vertical = 6.dp)) {
         Text("发给它的话", fontSize = 15.sp, color = skin.ink)
         Spacer(Modifier.height(8.dp))
-        /*
-         * 一段真能改的字。
-         *
-         * 上一版把出厂那段压在输入框上面当占位：两段字叠在一起，既看不清也点不准，
-         * 用户说的「用户也修改不了」就是它。占位只在空的时候写一行小字，落在最上面；
-         * 真开始写，那行就没了。
-         *
-         * 「看全文」「恢复出厂」拿掉：框里本来就是全文，也没有第二个版本可以「恢复」——
-         * 清空这一格就是回到出厂那段。
-         */
+        /* 一段真能改的字。出厂那段只在空着时当占位。 */
         Box(
             Modifier.fillMaxWidth().heightIn(min = 190.dp)
                 .clip(RoundedCornerShape(9.dp))
@@ -1976,7 +1807,7 @@ internal fun Pill(on: Boolean, onChange: (Boolean) -> Unit) {
             .clip(CircleShape)
             .background(bg)
             .border(1.dp, if (on) Color.Transparent else s.hair, CircleShape)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onChange(!on) },
+            .tap { onChange(!on) },
         contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart
     ) {
         Box(
@@ -1986,13 +1817,7 @@ internal fun Pill(on: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
-/**
- * 底部弹层。
- *
- * 用真 Dialog，不用页内 Box —— 页内 Box 有两个治不好的病：
- * 点空白处焦点不散、键盘收起后 imePadding 还按旧值留一大片白。
- * 独立窗口一关就干净。
- */
+/** 底部弹层。用真 Dialog，不用页内 Box —— 页内 Box 有两个治不好的病：点空白处焦点不散。 */
 @Composable
 internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
     val s = LocalSkin.current
@@ -2002,13 +1827,7 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
         onClose()
     }
 
-    /*
-     * 弹出来要有过程。
-     *
-     * Dialog 自己不带进场动画：窗口一开，整张纸和那层遮罩就是最终样子同时出现，
-     * 观感就是「闪一下」。这里自己把两样东西从头演一遍 ——
-     * 遮罩由淡到实，纸从下面升上来，两者同一条曲线同一个时长，才是一块东西在动。
-     */
+    /* 弹出来要有过程。Dialog 自己不带进场动画：窗口一开，整张纸和那层遮罩就是最终样子同时出现，观感就是「闪一下」。 */
     val rise = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         rise.animateTo(1f, tween(durationMillis = 220, easing = FastOutSlowInEasing))
@@ -2029,7 +1848,7 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
         Box(
             Modifier.fillMaxSize()
                 .background(s.scrim.copy(alpha = s.scrim.alpha * rise.value))
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { shut() }
+                .tap { shut() }
         ) {
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
@@ -2039,13 +1858,7 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
                         alpha = rise.value
                     }
                     .then(
-                        /*
-                         * 窗口给得对的机器（lift = 0）：照旧让 Compose 的 insets 说话 ——
-                         * 键盘、导航条、状态栏三样都让。
-                         *
-                         * 窗口越界的机器（lift > 0）：那一套在这台机器上量出来全是 0，
-                         * 让了等于没让，改用 sheetGeom 量到的实数。
-                         */
+                        /* 窗口给得对的机器（lift = 0）：照旧让 Compose 的 insets 说话 ——键盘、导航条、状态栏三样都让。 */
                         if (lift == 0) Modifier.windowInsetsPadding(
                             WindowInsets.ime
                                 .union(WindowInsets.navigationBars)
@@ -2057,7 +1870,7 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
                     )
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .background(s.surface)
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {}
+                    .tap {}
             ) { content() }
         }
     }
@@ -2065,18 +1878,6 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
 
 /**
  * 这张弹层纸在屏幕里到底有多少地方可以站。
- *
- * 同一份 `DialogProperties`，各家系统摆得不一样。小米 8 SE（Android 10）上，窗口就是
- * 「状态栏下面一横，到导航条上面一横」，纸贴在窗口底，正好落在底下那排字的上方；
- * K90 Pro Max（Android 17）上，窗口顶也从状态栏下面起算，高度却仍旧按整屏给 ——
- * 窗口底于是比屏幕底低一整个状态栏，纸跟着掉出去一截，底下那颗红按钮只剩一条边。
- *
- * 所以不猜。量一次窗口在屏幕上的实际矩形，超出去多少记下来；系统栏的真实厚度也一并量，
- * 弹层里读不到就退回资源里的标准值。
- *
- * 这整块包在 runCatching 里：它跑在 layout 回调上，抛一次就是整页崩。
- * 量不出来就用 0，弹层退回原来那条路，最坏是位置不对，不会挂。
- *
  * @return [越过屏幕底的像素, 顶部系统栏, 底部系统栏]
  */
 @Composable
@@ -2102,13 +1903,7 @@ private fun sheetGeom(): IntArray {
     return geom
 }
 
-/**
- * 系统栏上下沿的厚度，单位像素。
- *
- * `WindowInsets.Type.systemBars()` 是 API 30 才有的；minSdk 是 26，
- * 在 29 上直接调到就是个 `NoSuchMethodError`（Android 10 的机器一点就崩）。
- * 老机器走 `systemWindowInsetTop/Bottom`，那两个字段 API 20 就在。
- */
+/** 系统栏上下沿的厚度，单位像素。 */
 @Suppress("DEPRECATION")
 private fun insetBarsPx(wi: android.view.WindowInsets?, res: android.content.res.Resources): IntArray {
     var top = 0
@@ -2128,13 +1923,7 @@ private fun insetBarsPx(wi: android.view.WindowInsets?, res: android.content.res
     return intArrayOf(top, bottom)
 }
 
-/**
- * API 30 起才有 `getInsets(Type)`。
- *
- * 这里走反射，不写死 `WindowInsets.Type.systemBars()` —— 那样类引用会留在字节码里，
- * 老机器上无论有没有 SDK 守卫，只要有一种预解析的验证器碰上就炸（就是这么崩的）。
- * 反射缺类时抛 ClassNotFoundException，被上面的 runCatching 吃掉，退回资源值。
- */
+/** API 30 起才有 getInsets(Type)。 */
 private fun insetBarsPxR(wi: android.view.WindowInsets): IntArray {
     val api = android.os.Build.VERSION.SDK_INT
     if (api < 30) return intArrayOf(0, 0)
@@ -2167,10 +1956,7 @@ internal fun Bare(text: String) {
 internal fun Choices(title: String, onClose: () -> Unit, options: List<Pair<String, () -> Unit>>) {
     val s = LocalSkin.current
     Overlay(onClose) {
-        /*
-         * 选项多的时候要能往下滑：限高 + 可滚。不限的话，屏幕矮一点就只看得见前四五个，
-         * 底下的悄无声息被裁掉，看着像没列全。
-         */
+        /* 选项多的时候要能往下滑：限高 + 可滚。 */
         Column(
             Modifier.padding(vertical = 18.dp)
                 .heightIn(max = 520.dp)
@@ -2185,7 +1971,7 @@ internal fun Choices(title: String, onClose: () -> Unit, options: List<Pair<Stri
             options.forEach { (label, act) ->
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 52.dp)
-                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { act() }
+                        .tap { act() }
                         .padding(horizontal = 20.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

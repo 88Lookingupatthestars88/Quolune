@@ -3,11 +3,7 @@ package com.pagefold.reader.voice
 import com.pagefold.reader.field.EngineCfg
 import com.pagefold.reader.field.VoiceSource
 
-/**
- * 没人挑过嗓子的时候，替人挑一副。
- * MiMo 开着就用它那两副；别的嗓源一副都不填，界面写「未设置」。
- * 设置里存的名字一旦在音色库里不存在，界面就会「写着白桦，点开找不到白桦」。
- */
+/** 没人挑过嗓子的时候，替人挑一副。 */
 object AutoCast {
 
     const val MIMO_NARRATOR = "冰糖"
@@ -24,7 +20,6 @@ object AutoCast {
 
     /**
      * 真正该用的那一副。
-     *
      * @param pool 现在真能用的嗓子（[Catalog.ours] 那一份）
      * @param want 存下来的名字，可能是空的，也可能是早就不存在的
      * @return 空串 = 没有可用的，界面该写「未设置」

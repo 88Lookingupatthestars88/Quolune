@@ -75,6 +75,7 @@ import com.pagefold.reader.kit.Ornament
 import com.pagefold.reader.kit.SealMark
 import com.pagefold.reader.kit.Ruler
 import com.pagefold.reader.kit.Sz
+import com.pagefold.reader.kit.tap
 import com.pagefold.reader.voice.Audition
 import com.pagefold.reader.voice.CloneApi
 import com.pagefold.reader.voice.CloneStore
@@ -88,12 +89,7 @@ import kotlin.math.roundToInt
 /** 情绪档。写了就按写的来，没写就按选的那档。 */
 val STYLES = listOf("平静", "温和", "严肃", "激昂", "悲伤", "欢快")
 
-/**
- * 音色页。
- *
- * 顶上那张卡是现在用的这一副，左右滑——**滑到哪一副就是哪一副**，不用再点一下「用」。
- * 下面按嗓子分组平铺，点一行直接换过去，顶上那张卡**同时跟着翻过去**。
- */
+/** 音色页。顶上那张卡是现在用的这一副，左右滑——滑到哪一副就是哪一副，不用再点一下「用」。 */
 @Composable
 fun VoiceScreen(
     s: Settings,
@@ -107,12 +103,7 @@ fun VoiceScreen(
     var custom by remember { mutableStateOf(app.box.custom()) }
     var msg by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
-    /*
-     * 克隆对话框。跟「新建」分开两个入口：
-     * 新建是**填一句话造一副嗓**（小米独家，每次念书现场重生成）；
-     * 克隆是**拿一段录音复刻**（做完锁死，才是有声书能长期用的那种）。
-     * 这两件事产物不一样、后面谁去念也不一样，混在一个按钮里必然说不清。
-     */
+    /* 克隆对话框。跟「新建」分开两个入口：新建是填一句话造一副嗓（小米独家，每次念书现场重生成）；克隆是拿一段录音复刻（做完锁死。 */
     var cloning by remember { mutableStateOf(false) }
 
     var refresh by remember { mutableIntStateOf(0) }
@@ -136,13 +127,7 @@ fun VoiceScreen(
     val pool = remember(groups) { groups.flatMap { it.second } }
 
 
-    /*
-     * 「在用哪一副」只有一个答案：先认存下来的名字，认不出就按开着的嗓源给一副。
-     *
-     * 以前这里只认存下来的名字，顶栏却走了一遍兜底，两处口径不一样：
-     * 新装或者存档里那副没了的时候，顶栏写着「在用 冰糖」，下面一张卡都不亮 ——
-     * 看着像坏了。现在两边都从 currentName 取。
-     */
+    /* 「在用哪一副」只有一个答案：先认存下来的名字，认不出就按开着的嗓源给一副。 */
     val currentName = remember(pool, s.defaultVoice, s.enginesJson) {
         AutoCast.resolve(pool, s.engines, s.defaultVoice, dialog = false)
     }
@@ -150,12 +135,7 @@ fun VoiceScreen(
         pool.firstOrNull { it.name == currentName || it.param == currentName }?.id ?: ""
     }
 
-    /*
-     * 当前这一副能调什么，以及它现在调成什么样。
-     *
-     * 状态必须提在 LazyColumn 外面：列表里的 lambda 不是可组合作用域，
-     * 在里面写 remember 编译都过不去。
-     */
+    /* 当前这一副能调什么，以及它现在调成什么样。 */
     val curVoice = pool.firstOrNull { it.id == currentId }
     val curProto = curVoice?.let { protoOf(it, s.engines) }.orEmpty()
     val curModel = curVoice?.let { modelOf(it, s.engines) }.orEmpty()
@@ -188,11 +168,7 @@ fun VoiceScreen(
         if (hearing != null) return
         scope.launch {
             hearing = v.id
-            /*
-             * 试听要念的是**手上这份**，不是上次存下的那份 ——
-             * 不然推完滑杆点试听，听着一点变化都没有，还得先存再试。
-             * 不是当前这一副的时候没有草稿可传，按它自己存的那份念。
-             */
+            /* 试听念手上这份，不读上次存下的。 */
             val live = if (v.id == currentId) draft else null
             val res = withContext(Dispatchers.IO) {
                 runCatching {
@@ -223,10 +199,7 @@ fun VoiceScreen(
 
     /*
      * 选一副：先把选择写进去，再去翻上面那张卡。
-     *
-     * 顺序不能反。先翻卡再写的话，中间被打断（换了目标、LaunchedEffect 被取消），
-     * 写盘那句就永远执行不到，看着是「点了没反应」。
-     * 卡翻不过去只是不好看，选择一定生效。
+     * 顺序不能反。
      */
     fun pick(v: Voice) {
         use(v)
@@ -238,46 +211,15 @@ fun VoiceScreen(
         }
     }
 
-    /**
-     * 点某一行/某张卡上的「调」。
-     *
-     * 动作是「选中它，再回到顶上那一块」—— 调法只有一份，就在上面那块，
-     * 面板里另开一套会让同一个数出现两处，谁改谁不生效说不清。
-     */
-    /**
-     * 点「调」= 只打开这一副的调法。
-     *
-     * 不动「在用」—— 想调一副不相干的嗓子，是这个动作里最常见的一件事；
-     * 顺手把它换成在用的，等于替人做了个他没说要做的决定。
-     */
+    /** 点某一行/某张卡上的「调」。 */
+    /** 点「调」= 只打开这一副的调法。 */
     fun focus(v: Voice) {
         tuning = v
     }
 
-    /*
-     * ── 上面那张卡和下面那一行，怎么才对得上 ──
-     *
-     * 只留**一个**真相：defaultVoice。
-     *
-     * 前一版靠一对状态互相盯 ——「谁在翻页」的那个布尔。它有一个致命毛病：
-     * 翻页那段被取消时，复位那一行根本执行不到（取消是异常，直接跳过后面的语句），
-     * 布尔就永远停在 true。于是「手拨停下认落点」那一段永久失灵：
-     * 滑到第二张以后，下面再也同步不上去，点哪一行都不认。
-     *
-     * 现在没有任何需要复位的状态：
-     *   · 手拨停下 → settledPage 变了 → 写一次选择；
-     *   · 点某一行 → 先写选择，再翻卡（翻卡本身又会走一次上面那条，写的是同一个值，跳过）。
-     * 取消掉任何一段，都不留下后遗症。
-     */
+    /* ── 上面那张卡和下面那一行，怎么才对得上 ──只留一个真相：defaultVoice。 */
     LaunchedEffect(pager, pool) {
-        /*
-         * 两个状态一起盯，不能只盯 settledPage 再用 isScrollInProgress 去过滤。
-         *
-         * settledPage 只在停稳那一下变一次，而那一刻 isScrollInProgress 往往还是 true；
-         * 过滤掉之后它不会再变，于是这一页永远轮不到写进选择里 —— 界面上就是
-         * 「滑回来不亮、也不显示在用」。把手势状态一起放进被观察的值里，
-         * 它变回 false 时这一对值又变了一次，落点这才补上。
-         */
+        /* 两个状态一起盯，不能只盯 settledPage 再用 isScrollInProgress 去过滤。 */
         snapshotFlow { pager.settledPage to pager.isScrollInProgress }.collect { (idx, moving) ->
             if (moving) return@collect
             val v = pool.getOrNull(idx) ?: return@collect
@@ -473,24 +415,8 @@ fun VoiceScreen(
             item {
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
                     Card {
-                        /*
-                         * 四个动作，分两行。
-                         *
-                         * 一行放四个在 360dp 的屏上每个只剩 70dp，「克隆一段」这种四个字
-                         * 会被压成一团。两行各两个，手指落得准。
-                         *
-                         * 更重要的是**前两个只在真做得成的时候才出现**：
-                         * 「造一副」只有开着 MiMo 才有意义（七家里只有它有 voicedesign），
-                         * 「克隆一段」只有开着 MiMo / 硅基 / MiniMax 才有意义。
-                         * 摆一颗点下去必然失败的按钮，比不摆更糟。
-                         */
-                        /*
-                         * 两个入口各有各的条件，别摆一颗点下去必然失败的按钮。
-                         *
-                         * 「造一副」只有小米能做（七家里只有它有 voicedesign，
-                         * 音色是拿一句描述现场生成的）。
-                         * 「克隆音色」多两家（硅基、MiniMax 各有一套上传→拿 voice_id 的接口）。
-                         */
+                        /* 四个动作，分两行。一行放四个在 360dp 的屏上每个只剩 70dp，「克隆一段」这种四个字会被压成一团。 */
+                        /* 两个入口各有各的条件，别摆一颗点下去必然失败的按钮。 */
                         val canDesign = s.engines.any { it.on && it.protocol == "mimo" }
                         val canClone = s.engines.any {
                             it.on && CloneApi.shape(it.protocol, it.base ?: "") != null
@@ -650,13 +576,7 @@ fun VoiceScreen(
 
 // ─────────────────────────────────────────────────────────────
 
-/**
- * 认编码。
- *
- * 手机上导出的大多是 UTF-8；但用记事本之类存过的包常常是 GBK，
- * 里面全是中文名，按 UTF-8 硬读会读出一串问号，然后「一条都没有」。
- * 先试 UTF-8（严格），不成就当 GBK。
- */
+/** 认编码。手机上导出的大多是 UTF-8；但用记事本之类存过的包常常是 GBK，里面全是中文名，按 UTF-8 硬读会读出一串问号。 */
 private fun decode(bytes: ByteArray): String {
     val utf8 = runCatching {
         java.nio.charset.Charset.forName("UTF-8")
@@ -742,11 +662,6 @@ private fun enginesOn(s: Settings): String =
 
 /**
  * 重名就加序号。
- *
- * 选中的那副音色存的是**名字**（defaultVoice 这个字段）。两副同名的摆在一起，
- * 选中的永远是先找到的那一副 —— 用户会觉得「点了没用」。
- * 克隆两段录音都叫「老周」是最容易撞上的情形，所以名字必须在本机唯一。
- *
  * @return 可以直接用的名字：要么原样，要么带一个序号后缀
  */
 internal fun freeName(app: App, want: String, skipId: String = ""): String {
@@ -766,10 +681,6 @@ internal fun freeName(app: App, want: String, skipId: String = ""): String {
 
 /**
  * 这副音色属于哪个嗓源，显示嗓源名。
- *
- * 都写「自建」的话，十几副音色同名，分不清手里这副是硅基的还是 MiniMax 的，
- * 要换一家听都不知道从哪家重做。
- *
  * @param engines 现在的声源表；查不到 id 才退回 kind 上的老名字
  */
 private fun nameOf(engine: String, engines: List<com.pagefold.reader.field.EngineCfg>): String {
@@ -781,13 +692,7 @@ private fun nameOf(engine: String, engines: List<com.pagefold.reader.field.Engin
     }
 }
 
-/**
- * 这副音色的类型。三者行为完全不同，必须写在脸上：
- *
- *   造   每次念书都按那句描述重新生成，两次出来不完全一样
- *   复刻 声纹已经锁住，念多少次都是同一个声音
- *   名字 就是一个音色名，服务端那边本来就存着
- */
+/** 这副音色的类型。三者行为完全不同，必须写在脸上：造   每次念书都按那句描述重新生成，两次出来不完全一样复刻 声纹已经锁住。 */
 private fun kindTag(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg>): String = when {
     v.builtin -> ""
     v.kind == "design" -> "造"
@@ -886,22 +791,14 @@ private fun CardVoice(
                 )
             }
             Spacer(Modifier.weight(1f))
-            /*
-             * 右上角永远是**家名**，不写「在用」。
-             * 选没选中，名字的颜色和整张卡的边框已经说了；把这一格让给家名，
-             * 用户随时知道手里这副是谁的 —— 换一家重做的时候才知道去哪儿重做。
-             */
+            /* 右上角永远是家名，不写「在用」。 */
             Text(
                 nameOf(v.engine, engines),
                 fontSize = 10.sp, color = s.inkFaint
             )
         }
         Spacer(Modifier.height(7.dp))
-        /*
-         * 卡上这一行要把「造出来的」和「复刻的」说清：
-         * 造的那种每次念书都重新生成，今天和下周可能不是同一个人；
-         * 复刻的声纹已经锁住。这两句话不一样，用户做的决定也不一样。
-         */
+        /* 卡上这一行要把「造出来的」和「复刻的」说清：造的那种每次念书都重新生成，今天和下周可能不是同一个人；复刻的声纹已经锁住。 */
         Text(
             v.desc.ifBlank { nameOf(v.engine, engines) },
             fontSize = 11.sp, color = s.inkDim, lineHeight = 16.sp,
@@ -917,10 +814,7 @@ private fun CardVoice(
                 Modifier
                     .clip(RoundedCornerShape(7.dp))
                     .background(if (playing) s.flame else s.flameGhost)
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { if (!loading) onSay() }
+                    .tap { if (!loading) onSay() }
                     .padding(horizontal = 11.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -951,10 +845,7 @@ private fun CardVoice(
                 color = s.inkFaint,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { onTune() }
+                    .tap { onTune() }
                     .padding(horizontal = 7.dp, vertical = 4.dp)
             )
             if (!on) {
@@ -963,10 +854,7 @@ private fun CardVoice(
                     fontSize = 11.sp, color = s.inkFaint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onUse() }
+                        .tap { onUse() }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
                 )
             }
@@ -991,10 +879,7 @@ private fun VoiceRow(
     val from = nameOf(v.engine, engines)
     Row(
         Modifier.fillMaxWidth()
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { onUse() }
+            .tap { onUse() }
             .padding(vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1022,12 +907,7 @@ private fun VoiceRow(
                     Text("在用", fontSize = 9.sp, color = s.flame)
                 }
             }
-            /*
-             * 第二行：家里 + 描述。
-             *
-             * 家名必须在这儿出现一次 —— 上面那一行已经挤不下了，
-             * 而「这副是谁家的」是用户要换一家重做时唯一的线索。
-             */
+            /* 第二行：家里 + 描述。家名必须在这儿出现一次 —— 上面那一行已经挤不下了，而「这副是谁家的」是用户要换一家重做时唯一的线索。 */
             val sub = listOf(from, v.desc).filter { it.isNotBlank() }.joinToString(" ")
             if (sub.isNotBlank()) {
                 Spacer(Modifier.height(1.dp))
@@ -1041,7 +921,7 @@ private fun VoiceRow(
         Box(
             Modifier.size(32.dp).clip(CircleShape)
                 .border(1.dp, s.hairSoft, CircleShape)
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                .tap {
                     if (!loading) onSay()
                 },
             contentAlignment = Alignment.Center
@@ -1061,26 +941,17 @@ private fun VoiceRow(
             fontSize = 11.sp, color = s.inkFaint,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onTune() }
+                .tap { onTune() }
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         )
-        /*
-         * 入口写「编辑」，不画一个 ×。× 一点就删，删之前看不见自己删的是什么。
-         * 点开是名字、描述、删除，三件事在一屏里。
-         */
+        /* 入口写「编辑」，不画一个 ×。 */
         if (onEdit != null) {
             Text(
                 "编辑",
                 fontSize = 11.sp, color = s.inkFaint,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { onEdit() }
+                    .tap { onEdit() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             )
         }
@@ -1094,12 +965,7 @@ private fun VoiceRow(
 
 /**
  * 一副自建音色，点开能改什么，取决于它是怎么来的。
- *
- *   造出来的  音色就是那句描述 —— 改一个字，声音就换一个人
- *   复刻的    声纹跟着录音走，录音定了就定了，这里只能改名
- *   一个名字  对面本来就存着那副嗓，换声音不在这儿
- *
- * 三种情况给三种界面。把不能改的格子摆出来，用户会以为改了有用。
+ * 把不能改的格子摆出来，用户会以为改了有用。
  */
 @Composable
 private fun EditVoice(
@@ -1135,10 +1001,7 @@ private fun EditVoice(
                     "取消", fontSize = 12.sp, color = skin.inkFaint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onClose() }
+                        .tap { onClose() }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
                 )
             }
@@ -1192,10 +1055,7 @@ private fun EditVoice(
                         if (want.isBlank()) { hint = "名字不能空着"; return@Btn }
                         if (shaper && body.isBlank()) { hint = "音色描述不能空着"; return@Btn }
 
-                        /*
-                         * 名字改了，选中的那一格也得跟着改。
-                         * 选中的音色存的是**名字**，不跟着改就等于「保存完变回原来那副」。
-                         */
+                        /* 名字改了，选中的那一格也得跟着改。 */
                         val now = freeName(app, want, skipId = v.id)
                         val fixed = v.copy(
                             name = now,
@@ -1229,10 +1089,7 @@ private fun EditVoice(
                     fontSize = 12.sp, color = skin.bad,
                     modifier = Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { asking = true }
+                        .tap { asking = true }
                         .padding(horizontal = 2.dp, vertical = 6.dp)
                 )
             } else {
@@ -1302,10 +1159,7 @@ private fun NewVoice(
                     "取消", fontSize = 12.sp, color = skin.inkFaint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onClose() }
+                        .tap { onClose() }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
                 )
             }
@@ -1330,10 +1184,7 @@ private fun NewVoice(
                                 if (on) Color.Transparent else skin.hairSoft,
                                 RoundedCornerShape(9.dp)
                             )
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) { gender = k }
+                            .tap { gender = k }
                             .padding(vertical = 11.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -1357,13 +1208,7 @@ private fun NewVoice(
                 fontSize = 11.sp, color = skin.inkFaint, lineHeight = 16.sp
             )
             Spacer(Modifier.height(5.dp))
-            /*
-             * 这一句必须写。
-             *
-             * 造出来的不是一副固定的嗓子 —— 每次念书都是拿这句话现生成，
-             * 服务端那边不存任何东西，两次出来不完全一样。
-             * 不讲清，用户会拿它录一部长篇，然后发现第二章换了个人。
-             */
+            /* 这一句必须写。造出来的不是一副固定的嗓子 —— 每次念书都是拿这句话现生成，服务端那边不存任何东西，两次出来不完全一样。 */
             Text(
                 "每次念书都按这句话重新生成，两次未必一模一样。要固定的嗓子，用「克隆一段」。",
                 fontSize = 11.sp, color = skin.inkFaint, lineHeight = 16.sp
@@ -1447,12 +1292,7 @@ private fun Field(
 // 判断这一副属于哪套协议、会发哪个模型
 // ─────────────────────────────────────────────────────────────
 
-/**
- * 这副音色走哪套协议。
- *
- * 跟合成层 [com.pagefold.reader.voice.Synth] 一个判法：先按嗓源 id 认
- * （同一家能开好几副，只有 id 分得清），认不出再按 engine 上那个老名字。
- */
+/** 这副音色走哪套协议。跟合成层 [com.pagefold.reader.voice.Synth] 一个判法。 */
 internal fun protoOf(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg>): String {
     engines.firstOrNull { it.id == v.engine }?.let { return it.protocol }
     return when (v.engine.lowercase()) {
@@ -1461,7 +1301,6 @@ internal fun protoOf(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg
     }
 }
 
-/** 这副音色这一次真正会发出去的模型名。造、复刻、朗读三格各管一路。 */
 /** 这副音色这一次真正会发出去的模型名。造、复刻、朗读三格各管一路。 */
 internal fun modelOf(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg>): String {
     val e = engines.firstOrNull { it.id == v.engine } ?: return ""
@@ -1474,8 +1313,6 @@ internal fun modelOf(v: Voice, engines: List<com.pagefold.reader.field.EngineCfg
 
 /**
  * 一副音色的所有可调项。顶上那一块和「调」弹出的那张纸用的是同一份，
- * 所以两边永远一致，不会出现同一个数在两处写法不同。
- *
  * @param knobs 这一副能调哪几样，由它所属的协议和模型决定
  */
 @Composable
@@ -1720,12 +1557,7 @@ internal fun TuneRows(
     }
 }
 
-/**
- * 「调」点开的那张纸。
- *
- * 里面跟顶上那一块是同一个 [TuneRows]，所以两处永远一致。
- * 这里多一颗「存下」，因为从列表点进来的人不一定会滚回顶上去找那颗按钮。
- */
+/** 「调」点开的那张纸。里面跟顶上那一块是同一个 [TuneRows]，所以两处永远一致。 */
 @Composable
 private fun VoiceTuneSheet(
     v: Voice,
@@ -1746,12 +1578,7 @@ private fun VoiceTuneSheet(
     var cur by remember(v.id) { mutableStateOf(saved) }
     val dirty = cur != saved
 
-    /*
-     * 这张纸里也能试听。
-     *
-     * 调完不听见，就得先存下、退出去、在列表里再找一次那一行 —— 三步里两步是多余的。
-     * 念的是手上这份（[one]），不用存。
-     */
+    /* 这张纸里也能试听。调完不听见，就得先存下、退出去、在列表里再找一次那一行 —— 三步里两步是多余的。 */
     val scope = rememberCoroutineScope()
     val playing = Audition.isOn(v.id)
     var hearing by remember(v.id) { mutableStateOf(false) }
@@ -1802,10 +1629,7 @@ private fun VoiceTuneSheet(
                     "收起", fontSize = 12.sp, color = skin.inkFaint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        ) { onClose() }
+                        .tap { onClose() }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
                 )
             }

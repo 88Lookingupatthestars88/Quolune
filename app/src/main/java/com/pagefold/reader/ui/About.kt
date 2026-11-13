@@ -41,19 +41,9 @@ import com.pagefold.reader.kit.Masthead
 import com.pagefold.reader.kit.Ornament
 import com.pagefold.reader.kit.Rule
 import com.pagefold.reader.kit.Sz
+import com.pagefold.reader.kit.tap
 
-/**
- * 关于。
- *
- * 一屏三件事：谁做的、它能干什么、想说话往哪儿说。
- * 不列致谢、不说接了几家服务 —— 用户不必知道这些。版次只在末尾留一行，不占版面。
- *
- * 「创作人」单独成一块：这是书的末尾会有的那半页（版权页），
- * 不是一张功能卡。下面的字从它底下接着排，首行缩进两格，跟正文一个排法。
- *
- * 也不写某一家引擎的名字：Quolune 是几张嗓子并用，谁的都能接。
- * 把其中一家写进「关于」，等于把入口收窄成一家。
- */
+/** 关于。一屏三件事：谁做的、它能干什么、想说话往哪儿说。 */
 @Composable
 fun AboutScreen(
     s: Settings,
@@ -62,11 +52,7 @@ fun AboutScreen(
 ) {
     val skin = LocalSkin.current
 
-    /*
-     * 版次从安装包自己身上读，不写死。
-     *
-     * 写死的那一行每改一次版本就得记着同步一次 —— 忘一次，「关于」里那一行就是错的。
-     */
+    /* 版次从安装包自己身上读，不写死。 */
     val verName = remember(app) {
         runCatching {
             app.packageManager.getPackageInfo(app.packageName, 0).versionName
@@ -149,14 +135,7 @@ fun AboutScreen(
             }
         }
 
-        /*
-         * 项目页。**摆在版次下面** —— 版权页的顺序就是「正文、版次、出处」，
-         * 仓库放在正文中间等于把落款插进了话里。
-         *
-         * 一行一张卡，跟「声源」「接口」那些卡片是同一套画法：左边一枚印、中间名字 + 地址、
-         * 整行可点。点一下交给浏览器，不在应用里套一个 WebView —— 那种「半截浏览器」
-         * 没有地址栏、没有书签，用户想存下来或换个浏览器都得先退出去。
-         */
+        /* 项目页。摆在版次下面 —— 版权页的顺序就是「正文、版次、出处」，仓库放在正文中间等于把落款插进了话里。 */
         item {
             Column(Modifier.fillMaxWidth().padding(horizontal = Sz.gutter).padding(top = 16.dp)) {
                 LinkCard(
@@ -173,13 +152,7 @@ fun AboutScreen(
 /** 项目页。仓库地址放在这里，别处要用就引用这一个。 */
 private const val REPO_URL = "https://github.com/88Lookingupatthestars88/Quolune"
 
-/**
- * 一张「点一下去外面」的卡。
- *
- * 交给系统浏览器打开，不在应用里套 WebView：那种「半截浏览器」没有地址栏、
- * 没有书签，想存下来或换个浏览器都得先退出去。系统里没装能开 http 的应用时，
- * 直接说一句，不留一个点了没反应的行。
- */
+/** 一张「点一下去外面」的卡。交给系统浏览器打开，不在应用里套 WebView：那种「半截浏览器」没有地址栏、没有书签。 */
 @Composable
 private fun LinkCard(mark: String, title: String, url: String) {
     val s = LocalSkin.current
@@ -199,10 +172,7 @@ private fun LinkCard(mark: String, title: String, url: String) {
                 .clip(RoundedCornerShape(s.rCard))
                 .background(s.surface)
                 .border(1.dp, s.hairSoft, RoundedCornerShape(s.rCard))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
+                .tap {
                     val ok = runCatching {
                         ctx.startActivity(
                             android.content.Intent(
@@ -217,12 +187,7 @@ private fun LinkCard(mark: String, title: String, url: String) {
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            /*
-             * 左边那块印里写的是「仓库」两个字。
-             *
-             * 上一版只放一个「仓」，读起来像一枚闲章，认不出是干什么的 ——
-             * 那儿本来就该写清楚这是哪个东西。
-             */
+            /* 左边那块印里写的是「仓库」两个字。 */
             Box(
                 Modifier.width(44.dp).height(34.dp).clip(RoundedCornerShape(9.dp))
                     .background(s.flameGhost),

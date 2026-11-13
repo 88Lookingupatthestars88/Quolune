@@ -3,6 +3,12 @@ package com.pagefold.reader.book
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 
 /** 一本书的元数据。正文不入库，只存文件路径和阅读位置。 */
@@ -31,34 +37,32 @@ data class BookMeta(
     val tuneJson: String = "",
 )
 
-/**
- * 书库。一个 JSON 文件，一次读写。
- * 正文永远留在原文件 / files/books 下，不复制、不拼接，避免内存爆掉。
- */
+/** 书库。一个 JSON 文件，一次读写。 */
 class Shelf(ctx: Context) {
     private val ctx: Context = ctx.applicationContext
     private val dir = File(ctx.filesDir, "books").apply { mkdirs() }
     private val idx = File(ctx.filesDir, "shelf.json")
     private val gson = Gson()
 
+    /* 内存里的那一份。所有方法经 all() 读它，不再每次读盘解析。 */
+    private var mem: List<BookMeta>? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var pending: Job? = null
+
     fun dir(): File = dir
 
-    /**
-     * 全部的书。
-     *
-     * **必须过一遍 [fix]。** Gson 不走 Kotlin 构造器，也不看可空性 ——
-     * 旧存档里没有的键（tuneJson、castJson、group、cover、rate…）会被塞成 null，
-     * 声明成非空 String 也挡不住。之后任何一句 `.isBlank()` 就是 NPE，
-     * 而这段代码在 Application.onCreate 里被调到，一炸应用直接消失。
-     *
-     * 「覆盖安装就闪退、删掉重装就好」就是这么来的：新装没有旧存档，一个 null 都碰不上。
-     */
-    fun all(): List<BookMeta> = runCatching {
-        if (!idx.exists()) return@runCatching emptyList()
-        val t = object : TypeToken<List<BookMeta>>() {}.type
-        val raw = gson.fromJson<List<BookMeta>>(idx.readText(), t) ?: emptyList()
-        raw.mapNotNull { runCatching { fix(it) }.getOrNull() }
-    }.getOrDefault(emptyList())
+    /** 全部的书。必须过一遍 [fix]。 */
+    fun all(): List<BookMeta> {
+        mem?.let { return it }
+        val list = runCatching {
+            if (!idx.exists()) return@runCatching emptyList()
+            val t = object : TypeToken<List<BookMeta>>() {}.type
+            val raw = gson.fromJson<List<BookMeta>>(idx.readText(), t) ?: emptyList()
+            raw.mapNotNull { runCatching { fix(it) }.getOrNull() }
+        }.getOrDefault(emptyList())
+        mem = list
+        return list
+    }
 
     /** 把旧存档里读出来的 null 逐个兜平。只兜不猜，缺的给空值。 */
     private fun fix(b: BookMeta): BookMeta = b.copy(
@@ -72,7 +76,23 @@ class Shelf(ctx: Context) {
     )
 
     fun save(list: List<BookMeta>) {
+        mem = list
+        pending?.cancel()
+        pending = scope.launch {
+            delay(1500)
+            write(list)
+        }
+    }
+
+    private fun write(list: List<BookMeta>) {
         runCatching { idx.writeText(gson.toJson(list)) }
+    }
+
+    /** 立刻落盘。退到后台、离开书的时候调一次。 */
+    fun flush() {
+        pending?.cancel()
+        pending = null
+        mem?.let { write(it) }
     }
 
     fun add(meta: BookMeta): List<BookMeta> {
@@ -80,6 +100,7 @@ class Shelf(ctx: Context) {
         list.removeAll { it.id == meta.id }
         list.add(0, meta)
         save(list)
+        flush()
         return list
     }
 
@@ -88,6 +109,8 @@ class Shelf(ctx: Context) {
         val target = list.firstOrNull { it.id == id }
         list.removeAll { it.id == id }
         save(list)
+        /* 正文文件下面马上就删了，索引必须同一刻落盘，否则中途被杀就留一条指向空文件的记录。 */
+        flush()
         if (target != null) runCatching { File(target.path).delete() }
         /* 这本书的句库和章节目录跟着走，不然删了书还占十几 MB。 */
         runCatching { Lines.drop(ctx, id) }
@@ -130,21 +153,10 @@ class Shelf(ctx: Context) {
         return list
     }
 
-    /**
-     * 读某一章的正文。
-     *
-     * 台账要一段一段摆出来，但它只需要**这一章**。整本读出来再切，
-     * 一本三百万字的书就是七兆字符一次进堆 —— 在这样的机器上够呛。
-     */
+    /** 读某一章的正文。台账要一段一段摆出来，但它只需要这一章。 */
     fun readChapter(id: String, ch: Int): String {
         val bm = find(id) ?: return ""
-        /*
-         * 目录只读落盘那份，不读整本正文。
-         *
-         * 上一版是 read(id).substring(...)：读整本（三百万字 ≈ 七兆字符）+ 再切一份，
-         * 台账翻一章就来一次，翻上七八页就顶到堆顶。现在只开一个 32K 的读缓冲，
-         * 一边读一边累计字符数，只把落在这一章里的那几段留下来。
-         */
+        /* 目录只读落盘那份，不读整本正文。 */
         val list = Chapters.cached(ctx, id) ?: return ""
         val c = list.getOrNull(ch) ?: return ""
         val from = c.start.coerceAtLeast(0)

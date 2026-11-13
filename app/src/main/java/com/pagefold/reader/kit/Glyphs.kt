@@ -6,16 +6,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
-/**
- * 图标。
- *
- * material-icons-extended 那一包是五千多个图标类，没开缩减就整包编进 dex。
- * 界面上一共只点了十四枚，其中九枚 material-icons-core 里就有，
- * 剩下这五枚自己画：坐标沿用官方那套 24×24，形状与原来一致。
- *
- * 用法跟 Icons.Default.X 一样，染色交给 Icon 的 tint，
- * 所以 path 里统一填黑，下面不要再写第二种颜色。
- */
+/** 图标。material-icons-extended 那一包是五千多个图标类，没开缩减就整包编进 dex。 */
 object Glyph {
 
     /** 一条横杠。步进器减号、清单里的「没选中」。 */

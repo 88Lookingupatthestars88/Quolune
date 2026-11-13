@@ -1,6 +1,7 @@
 package com.pagefold.reader.kit
 
 import androidx.compose.animation.animateColorAsState
+import com.pagefold.reader.kit.tap
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -174,10 +175,7 @@ fun Divider(modifier: Modifier = Modifier) {
 
 // ───────────────────────── 页头 ─────────────────────────
 
-/**
- * 页头。刻意不用「英文小标签 + 超大标题」那种模板：
- * 这里是左对齐中文标题 + 右侧动作，标题下压一条短线。
- */
+/** 页头。刻意不用「英文小标签 + 超大标题」那种模板：这里是左对齐中文标题 + 右侧动作，标题下压一条短线。 */
 @Composable
 fun TopBar(
     title: String,
@@ -220,16 +218,7 @@ fun TopBar(
     }
 }
 
-/**
- * 每一页最上面那两行：一个主标题，一个副标题。没有英文小标。
- *
- * 主次靠字号差分，不靠颜色、线、色块。三行小字叠在一起，眼睛不知道先看哪儿。
- *
- * 排布：
- *   一、上边留 22dp。贴太高压到状态栏，就没有一页纸的感觉了。
- *   二、标题 31sp，行高 40sp，字距收紧 0.7。中文大字号不加紧，字与字之间会散。
- *   三、副标题 13.5sp，行高 21sp，比标题暗一档。两者左边缘对齐同一条竖线。
- */
+/** 每一页最上面那两行：一个主标题，一个副标题。 */
 @Composable
 fun Masthead(
     title: String,
@@ -300,7 +289,7 @@ fun KitRow(
 ) {
     val s = LocalSkin.current
     var m = Modifier.fillMaxWidth().heightIn(min = Sz.rowMin).padding(vertical = 10.dp)
-    if (onClick != null) m = m.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+    if (onClick != null) m = m.tap { onClick() }
     Row(m, verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label, fontSize = Sz.body.sp, color = s.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -347,7 +336,7 @@ fun IconBtn(
     val bg by animateColorAsState(if (active) s.flameGhost else s.panel, tween(200), label = "ibg")
     Box(
         Modifier.size(size).clip(CircleShape).background(bg)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() },
+            .tap { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, desc, tint = if (active) s.flame else s.inkDim, modifier = Modifier.size(size * 0.46f))
@@ -418,7 +407,7 @@ fun PickChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Mod
             .clip(RoundedCornerShape(s.rChip))
             .background(bg)
             .border(1.dp, if (selected) Color.Transparent else s.hair, RoundedCornerShape(s.rChip))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() }
+            .tap { onClick() }
             .padding(horizontal = 13.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -452,7 +441,7 @@ fun SegBar(
                 Modifier.weight(1f).height(36.dp)
                     .clip(RoundedCornerShape(s.rChip - 2.dp))
                     .background(if (on) s.flame else Color.Transparent)
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onPick(i) },
+                    .tap { onPick(i) },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -533,17 +522,14 @@ private fun StepKey(icon: androidx.compose.ui.graphics.vector.ImageVector, onCli
     val s = LocalSkin.current
     Box(
         Modifier.size(32.dp).clip(CircleShape).background(s.panelSink)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() },
+            .tap { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = s.inkDim, modifier = Modifier.size(16.dp))
     }
 }
 
-/**
- * 旋钮：滑块 + 数字框二合一。
- * 上方一行「名称 ………… − 数字 +」，下方细轨。拖动和键入实时同步。
- */
+/** 旋钮：滑块 + 数字框二合一。 */
 @Composable
 fun Dial(
     label: String,
@@ -734,13 +720,7 @@ fun StatusGap(extra: Dp = 0.dp) {
 // 尺：减号 · 轨道 · 加号
 // ─────────────────────────────────────────────────────────────
 
-/**
- * 一项数值。
- *
- * 手势交给 Material3 的 Slider：按下、拖动、方向锁、无障碍都是它管，
- * 竖向滑动不会被吞掉。手写 pointerInput 的话，闭包抓到的是首帧的 value，
- * 而且一按下就 consume，列表跟着卡住。
- */
+/** 一项数值。手势交给 Material3 的 Slider：按下、拖动、方向锁、无障碍都是它管，竖向滑动不会被吞掉。 */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun Ruler(
@@ -769,14 +749,7 @@ fun Ruler(
     LaunchedEffect(held) { if (!grip) live = held }
     val shown = if (grip) live else held
 
-    /*
-     * 手势块里要用的两个值，都走 rememberUpdatedState。
-     *
-     * 直接把它们写进 pointerInput 的 key 里是错的：外面每重组一次，
-     * 那两个 lambda / 数字就是新的，pointerInput 会把正在跑的手势协程取消重建，
-     * 手指刚拖出第一格就断，看着像「拖到一半自己弹回去」。
-     * key 固定成 Unit，值用最新的，两边都不误。
-     */
+    /* 手势块里要用的两个值，都走 rememberUpdatedState。 */
     val heldNow = rememberUpdatedState(held)
     val changeNow = rememberUpdatedState(onChange)
 
@@ -924,7 +897,7 @@ private fun Key(text: String, onClick: () -> Unit) {
         Modifier.size(36.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(s.panelSink)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onClick() },
+            .tap { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Text(text, fontSize = 16.sp, color = s.ink, fontFamily = s.numFont)
@@ -943,15 +916,7 @@ fun Hint(text: String, modifier: Modifier = Modifier) {
 
 // ───────────────────────── 纹样 ─────────────────────────
 
-/**
- * 一道分隔。
- *
- * 四套材质各画各的：纸墨是两道线（书口压出来的粗细线），玻璃是一道两头淡掉的横线，
- * 磨砂是细线加一个方点，科幻是断续线加两端的小折角。
- *
- * 它唯一的用处是：长页里两节之间有一处「换气了」的标记。
- * 不画边框、不画圆角、不留阴影 —— 那些只是把内容再框一遍。
- */
+/** 一道分隔。四套材质各画各的：纸墨是两道线（书口压出来的粗细线），玻璃是一道两头淡掉的横线，磨砂是细线加一个方点，科幻是断续线加两端的小折角。 */
 @Composable
 fun Rule(modifier: Modifier = Modifier) {
     val s = LocalSkin.current
@@ -988,12 +953,7 @@ fun Rule(modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * 一串小菱格，两头淡、中间实。
- *
- * 放在页头下面、区块之间当收尾的纹样。不是分割线（分割线是 [Rule]），
- * 是一段「纸边压过的花纹」，所以它两端要化开，不能齐头齐尾。
- */
+/** 一串小菱格，两头淡、中间实。 */
 @Composable
 fun Ornament(modifier: Modifier = Modifier, count: Int = 23) {
     val s = LocalSkin.current
@@ -1025,13 +985,6 @@ fun Ornament(modifier: Modifier = Modifier, count: Int = 23) {
 
 /**
  * 一枚印。
- *
- * 一枚方印压在这一页的角上：朱底、字是纸色、边栏一道细线、四角略略不齐
- * （真印不会四边笔直，齐得像按钮）。整体歪两度，看着像刚按下去。
- *
- * 印上两字竖排，或者一字居中。朱色取当前材质的主色，字取主色上的前景色 ——
- * 深色主题里是暗字压亮朱，浅色里是亮字压暗朱，两种都成立。
- *
  * @param word 印上那一两个字。多的截掉：印面本来就窄。
  */
 @Composable

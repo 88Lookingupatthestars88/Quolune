@@ -15,13 +15,7 @@ import java.security.MessageDigest
 /** 一段合成结果：磁盘上的文件 + 容器格式。 */
 data class Clip(val file: File, val ext: String)
 
-/**
- * 念过的一段，留个记号。
- *
- * 只有音频文件是没法给人看的 —— 一堆 md5 文件名，谁也认不出哪句是哪句。
- * 所以合成完顺手记一行：这段念的是什么、用的哪副嗓子、什么时候。
- * 家底那一页就是照这张表列出来的。
- */
+/** 念过的一段，留个记号。只有音频文件是没法给人看的 —— 一堆 md5 文件名，谁也认不出哪句是哪句。 */
 data class LedgerEntry(
     val key: String,
     val text: String,
@@ -32,63 +26,30 @@ data class LedgerEntry(
     val trial: Boolean = false,
 )
 
-/**
- * 合成调度。按**音色自己**属于哪副嗓子分流，几副嗓子可以同时开着。
- */
+/** 合成调度。按音色自己属于哪副嗓子分流，几副嗓子可以同时开着。 */
 class Synth(private val ctx: Context, private val sys: SysVoice) {
 
     private var mimo = MiMo()
     private var cfg: Settings? = null
 
-    /**
-     * 每副音色自己那份调法。由 [com.pagefold.reader.App] 接进来。
-     * 没接的时候一律按全局走，不会崩。
-     */
+    /** 每副音色自己那份调法。由 [com.pagefold.reader.App] 接进来。 */
     @Volatile var tunes: com.pagefold.reader.field.VoiceTune? = null
 
-    /**
-     * 念过的段落放 files/clips。
-     *
-     * 不放 cacheDir：那一整棵目录随时会被手机管家或系统清掉，而这批音频
-     * 对用户是「我念过的书」，不是可以重下的临时文件。放 files 下，
-     * 只有他在库房里勾掉、或者卸载应用，才会没。
-     */
+    /** 念过的段落放 files/clips。 */
     val cacheDir: File get() = File(ctx.filesDir, "clips").apply { mkdirs() }
 
-    /*
-     * 账本文件必须声明在 init 上面。
-     *
-     * Kotlin 按**声明顺序**初始化属性和 init 块。下面那个 init 会调 cleanOnce()，
-     * 而 cleanOnce 里要删这个文件；声明写在 init 下面，那一刻它还是 null，
-     * 删的时候就是空指针 —— 被 runCatching 吞掉，于是「清一次」的记号永远写不下去，
-     * 每次启动都当成没清过，把 clips 里所有音频删一遍。
-     */
+    /* 账本文件必须声明在 init 上面。 */
     private val ledgerFile = File(ctx.filesDir, "clips.json")
     private val ledgerBak = File(ctx.filesDir, "clips.json.bak")
     private val gson = com.google.gson.Gson()
     private var ledgerMem: MutableList<LedgerEntry>? = null
-    /**
-     * 账本读不出来的那一次。
-     *
-     * 读不出来和「本来就没有」必须分开：前者一旦被当成空账本写回去，
-     * 所有条目的原文就永久没了 —— 音频还在，字没了。
-     */
+    /** 账本读不出来的那一次。读不出来和「本来就没有」必须分开：前者一旦被当成空账本写回去，所有条目的原文就永久没了 —— 音频还在，字没了。 */
     private var ledgerBroken = false
 
-    /**
-     * 合成规则的版本。改了「怎么合成」就抬一格：缓存 key 全部换掉，旧音频一并清。
-     *
-     * 3：语速、音调、音量改由每副音色自己那份说了算；小米那一路开始发
-     *    一句自然语言请求。同一段字，按新规则合成出来的跟旧的不是一条。
-     */
+    /** 合成规则的版本。改了「怎么合成」就抬一格：缓存 key 全部换掉，旧音频一并清。 */
     private val CLIP_REV = 3
 
-    /**
-     * 把 rev 抬格前的音频清一次。
-     *
-     * 这些文件结构上是完整的 wav，乱只乱在内容（开头多念了一句），
-     * 靠 [sound] 查不出来，留着就会一直被播到。清完记一笔，不再重复清。
-     */
+    /** 把 rev 抬格前的音频清一次。 */
     private fun cleanOnce() = runCatching {
         val mark = File(ctx.filesDir, "clips.rev")
         val was = mark.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: 0
@@ -142,7 +103,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         val m = Engines.first(s.engines, VoiceSource.MIMO)
         val base = m?.base?.ifBlank { null } ?: s.mimoBase
         val key = if (m?.key?.isNotBlank() == true) m.key else s.mimoKey
-        if (cfg == null || cfg!!.mimoKey != key || cfg!!.mimoBase != base) {
+        val old = cfg
+        if (old == null || old.mimoKey != key || old.mimoBase != base) {
             mimo = MiMo(base, key)
         }
         mimo.appCtx = ctx
@@ -150,14 +112,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         cfg = s
     }
 
-    /**
-     * 这一段交给哪副嗓源。
-     *
-     * 顺序：先拿音色的 engine 当嗓源 id 找（一家一套音色名，只有 id 分得清）；
-     * 再按来路找；都不行就退回第一副开着的。
-     *
-     * 这里不许抛异常。抛一次就把整场播放带走。
-     */
+    /** 这一段交给哪副嗓源。顺序：先拿音色的 engine 当嗓源 id 找（一家一套音色名。 */
     private fun route(s: Settings, v: Voice): EngineCfg? {
         s.engines.firstOrNull { it.id == v.engine }?.let { return it }
         val src = runCatching { VoiceSource.valueOf(v.engine.uppercase()) }.getOrNull()
@@ -172,13 +127,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             else -> "mimo"
         }
 
-    /**
-     * 不同音色、不同段落判定必须分开，否则换了嗓音/换了调子还在放旧音频。
-     * 段落判定直接进指纹 —— 这是「选了风格却读得一样」的另一半原因。
-     *
-     * 这一副自己的调法也进指纹：调完语速再合成，必须是一条新音频，
-     * 否则听到的还是上次那条，看着像「调了没生效」。
-     */
+    /** 不同音色、不同段落判定必须分开，否则换了嗓音/换了调子还在放旧音频。 */
     private fun fingerprint(s: Settings, v: Voice, r: Reading?, rate: Int): String = buildString {
         append(v.engine).append('/').append(v.kind).append('/').append(v.param)
         // 模型进指纹，否则换了模型照样命中旧缓存，听着一模一样。
@@ -227,15 +176,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return null
     }
 
-    /**
-     * 判断这个文件是不是一段完整、能播的音频。
-     *
-     * 拿 wav 头里 `data` chunk 声明的长度跟实际长度对一下。对不上就是没写完，
-     * 或者被另一条流插过。只拦明显不对的：各家写 RIFF 头的手艺参差，
-     * 卡太紧会把好文件当坏的烧掉，那每次播放都要重合成。
-     *
-     * 调用它的是 [cached] 和 [land]。
-     */
+    /** 判断这个文件是不是一段完整、能播的音频。 */
     private fun sound(f: File): Boolean {
         if (!f.isFile) return false
         val n = f.length()
@@ -276,13 +217,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return true
     }
 
-    /**
-     * 把一段字节落成缓存文件。六个服务分支都走这里，别处不要再自己拼临时文件名。
-     *
-     * 两件事：
-     * 临时名带纳秒，两路同时合成同一段也各写各的，最后 rename 上来是原子的；
-     * 落盘后过一遍 [sound]，坏的删掉直接抛，交给上层重试。
-     */
+    /** 把一段字节落成缓存文件。六个服务分支都走这里，别处不要再自己拼临时文件名。 */
     private fun land(k: String, ext: String, bytes: ByteArray): File {
         if (bytes.size < 512) throw java.io.IOException("只回了 ${bytes.size} 字节，不像一段声音")
         val dst = File(cacheDir, "$k.$ext")
@@ -306,7 +241,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
 
     /**
      * 合成一段。先查缓存。
-     *
      * @param r      段落判定结果（旁白/对白/耳语…）
      * @param before 上文原句，给 MiMo 做语气参考
      * @param after  下文原句
@@ -320,34 +254,16 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         after: String? = null,
         rate: Int = 100,
         force: Boolean = false,
-        /*
-         * 一次性的调法。试听传这个：听到的是手上还没存的数，不是上一次存下的。
-         * 传了它就不走缓存 —— 并且由它参与缓存键，所以不会把存下的那条覆盖掉。
-         */
+        /* 一次性的调法。试听传这个：听到的是手上还没存的数，不是上一次存下的。 */
         one: com.pagefold.reader.field.Vt? = null,
     ): Clip {
         sync(s)
         val k = key(s, v, text, r, rate, one?.let { "u=${it.speed},${it.pitch},${it.volume},${it.mood},${it.temp}" }.orEmpty())
-        /*
-         * force = 试听时用：绕开缓存，逼它真去问一次。
-         * 不绕的话听到的是旧文件，刚改的模型、刚换的钥匙全没验到。
-         */
+        /* force = 试听时用：绕开缓存，逼它真去问一次。 */
         if (!force) cached(k)?.let { return it }
 
-        /*
-         * 倍速要烘进音频里，不能只靠播放器。
-         *
-         * 只设 MediaPlayer.playbackParams 的话，机器不支持时间伸缩（有些 ROM 会静默失败），
-         * 表现就是「拖到 2x，听着还是原速」。这里把这一本的念速乘进合成的语速，
-         * 出来的音频本身就是那个速度，播放器那层只当微调。
-         */
-        /*
-         * 这一副音色自己调过快慢、音调、音量没有。
-         *
-         * 调过就以它为准，四格一起看 —— 不去逐格跟全局比。逐格比的话，
-         * 用户把这一副的语速定在 100 想让它「就按原速」，而全局是 130 的时候，
-         * 这一格会被当成「没设」，嗓门又被拽回 130。整条替掉才说得清。
-         */
+        /* 倍速要烘进音频里，不能只靠播放器。 */
+        /* 这一副音色自己调过快慢、音调、音量没有。 */
         val mine = one ?: tunes?.let { t -> if (t.has(v.id)) t.of(v.id) else null }
         val own = mine ?: com.pagefold.reader.field.Vt(
             speed = s.speed,
@@ -363,26 +279,14 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         val file: File
         // 按**协议**分流，不按 engine 字符串。engine 现在可能是某一副嗓源的 id。
         val proto = protocolOf(s, v)
-        /*
-         * 模型不对，请求根本不发。
-         *
-         * 这一条不是防呆，是防**对面的沉默**：小米那套口收到不认识的 model 不报错，
-         * 直接按默认 TTS 念出来、回 200 加一段音频。客户端拿到音频就当成功，
-         * 于是「写字模型也能出声」「换哪个模型听着都一样」同时成立，而错误一个都不出现。
-         * 它不说，我们说。
-         */
+        /* 模型不对，请求根本不发。这一条不是防呆，是防对面的沉默：小米那套口收到不认识的 model 不报错。 */
         val eng = route(s, v)
         if (proto != "system") {
             // 拦截要用**真正会发的那个名字**，不是嗓源格子上那个：
             // 设计/克隆音色各走各的模型，三者可能都不同。
             val used = if (proto == "mimo") MiMo.modelFor(v, eng) else eng?.modelOr().orEmpty()
             val role = if (proto == "mimo" && (v.kind == "design" || v.kind == "clone")) v.kind else ""
-            /*
-             * 拦下来的理由原样带出去，别在这一层再压成一句话。
-             *
-             * 三种拦法说的不是一件事：「不是语音模型」「是造嗓音的模型，念不了书」
-             * 「不是音色克隆模型」。压成一句「不是语音模型」，用户拿到的方向就是错的。
-             */
+            /* 拦下来的理由原样带出去，别在这一层再压成一句话。 */
             Why.check(used, proto, role)?.let { throw IllegalStateException("不能合成：$it") }
         }
         when (proto) {
@@ -451,11 +355,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 note(k, text, v.name, ext)
             }
             "system" -> {
-                /*
-                 * 系统 TTS 自己往文件里写，不经过我们那层「先写临时名再改名」，
-                 * 所以它写的时候，另一路读到这里会看到一个只写了一半的 wav。
-                 * 这里给它一个临时名，写完再改名 —— 跟别的家一个待遇。
-                 */
+                /* 系统 TTS 自己往文件里写，不经过我们那层「先写临时名再改名」，所以它写的时候，另一路读到这里会看到一个只写了一半的 wav。 */
                 val tmp = File(cacheDir, "$k." + System.nanoTime().toString(36) + ".part.wav")
                 sys.file(text, v.param.ifBlank { s.sysVoice }, sp, pitchPct, tmp)
                 val dst = File(cacheDir, "$k.wav")
@@ -497,11 +397,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                     // 采样温度 0.00–1.00。超过 1 对面直接 400。
                     temperature = (own.temp.coerceIn(0, 100) / 100f),
                     cfg = eng,
-                    /*
-                     * 这一家没有数值的 speed / pitch 字段。这两格和调门一起，
-                     * 由 [MiMo.askPhrase] 拼成一句自然语言请求发出去；
-                     * 三样都没动就一个字都不发。
-                     */
+                    /* 这一家没有数值的 speed / pitch 字段。 */
                     speed = sp,
                     pitch = pitchPct,
                     mood = moodOf(s, v, r),
@@ -515,14 +411,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     }
 
 
-    /**
-     * 这一句的调门词。
-     *
-     * 三层往下掉：这一副自己调的 → 这一段判定出来的 → 全局那一档。
-     * 回空串表示「这一格不给」，让对面按文本自己判。
-     *
-     * 只回一个词。MiniMax 的 emotion、火山的语音指令都要的是短句，一句话塞进去不是它认的形状。
-     */
+    /** 这一句的调门词。三层往下掉：这一副自己调的 → 这一段判定出来的 → 全局那一档。 */
     private fun moodOf(s: Settings, v: Voice, r: Reading?): String {
         val own = tunes?.let { t -> if (t.has(v.id)) t.of(v.id).mood else null }
         if (!own.isNullOrBlank()) return own
@@ -540,15 +429,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     // ── 账本 ────────────────────────────────────────────────
 
     /**
-     * 把账本里不能用的行剔掉。
-     *
-     * 两种都能来：数组里直接是个 `null`，或者某个字段是 `null`。
-     * 后者更常见 —— Gson 不走构造函数，是拿反射往字段里塞值，
-     * 存档里少哪一个键，那一个字段就是 `null`，哪怕它在 data class 里声明成非空。
-     * 字段声明保证不了运行时，所以这里逐格兜一遍。
-     *
-     * 一条坏行留在账本里，就是**每次进定音页都崩一次**：读出来、碰第一个字段、空指针。
-     * 而且崩在读取的路上，下一次读到的还是那一行 —— 自己好不了。
+     * 把账本里不能用的行剔掉。两种都能来：数组里直接是个 null，或者某个字段是 null。
+     * 一条坏行留在账本里，就是每次进定音页都崩一次：读出来、碰第一个字段、空指针。
      */
     private fun ledgerClean(raw: List<LedgerEntry?>?): MutableList<LedgerEntry> {
         val out = ArrayList<LedgerEntry>((raw?.size ?: 0).coerceAtLeast(8))
@@ -572,14 +454,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return out
     }
 
-    /**
-     * 把 JSON 原文读成条目。
-     *
-     * 不走 Gson 的反射绑定，改成先解析成 JsonArray 再一格一格取。
-     * 反射绑定时字段缺一个就是 null，null 混进 list 就在下一次 it.key 处炸；
-     * 而整份文件只要有一处类型不对，Gson 直接把整份抛掉 —— 一千多条全没了。
-     * 逐格读，坏一条只丢一条。
-     */
+    /** 把 JSON 原文读成条目。 */
     private fun ledgerParse(raw: String): List<LedgerEntry>? {
         val arr = runCatching {
             com.google.gson.JsonParser.parseString(raw).asJsonArray
@@ -626,8 +501,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         val raw = runCatching { ledgerFile.readText() }.getOrNull()
         var parsed = raw?.let { ledgerParse(it) }
         /*
-         * 正文那份读不出来，就试备份。备份再不行，把这一份**留个底**再往下走 ——
-         * 宁可这一轮账是空的，不能把唯一那份原文盖掉。
+         * 正文那份读不出来，就试备份。
+         * 备份再不行，把这一份留个底再往下走 ——宁可这一轮账是空的，不能把唯一那份原文盖掉。
          */
         if (parsed == null) {
             parsed = runCatching { ledgerBak.readText() }.getOrNull()?.let { ledgerParse(it) }
@@ -668,12 +543,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         ledgerWrite(safe)
     }
 
-    /**
-     * 试听那一句。
-     *
-     * 音色页点「听一下」、复刻页点「听听像不像」，念的都是这一句 ——
-     * 它跟着账本一起存，所以能认出来：这些不是书里的字，是点出来的响。
-     */
+    /** 试听那一句。音色页点「听一下」、复刻页点「听听像不像」，念的都是这一句 ——它跟着账本一起存，所以能认出来：这些不是书里的字，是点出来的响。 */
     private val trialLine = "这一段，念给你听。"
 
     private fun note(key: String, text: String, voice: String, ext: String) {
@@ -690,24 +560,17 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 trial = text.trim() == trialLine,
             )
         )
-        /*
-         * 账本不截断。只留最后 400 行的话，盘上有一千五百段，页面上只列得出四百段，
-         * 剩下那一千多段看不见也就删不掉。一行几十字节，留着不占地方。
-         */
+        /* 账本不截断。只留最后 400 行的话，盘上有一千五百段，页面上只列得出四百段，剩下那一千多段看不见也就删不掉。 */
         ledgerSave(list)
     }
 
-    /**
-     * 念过的段落，新的在前。
-     *
-     * 两头都要对齐：账上有、盘上没了（缓存被系统清过）的要销掉；
-     * 盘上有、账上没有的（老版本截断账本留下的）也要补进来 ——
-     * 不然那些文件永远列不出来，也就永远删不掉。
-     */
+    /** 念过的段落，新的在前。只扫一遍目录：盘上有账上没有的补进来，账上有盘上没有的销掉。 */
     fun ledger(): List<LedgerEntry> {
         val list = ledgerLoad()
         val known = list.mapTo(HashSet()) { it.key }
         var dirty = false
+        /* key.ext → 文件。一千五百段时逐条 exists() 是三千次 stat，一次扫目录就够。 */
+        val onDisk = HashMap<String, File>(2048)
         runCatching {
             cacheDir.listFiles()?.forEach { f ->
                 if (!f.isFile) return@forEach
@@ -718,8 +581,9 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 if (ext != "wav" && ext != "mp3") return@forEach
                 // 临时的半截文件不是一段念过的书，别让它进账本。
                 if (name.contains(".part")) return@forEach
-                if (f.length() <= 512) return@forEach
                 val key = name.substring(0, dot)
+                onDisk[key.lowercase() + "." + ext] = f
+                if (f.length() <= 512) return@forEach
                 if (!known.add(key)) return@forEach
                 list.add(
                     LedgerEntry(
@@ -734,13 +598,10 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             }
         }
         val alive = list.filter { e ->
-            val f = File(cacheDir, e.key + "." + e.ext)
-            f.exists() && f.length() > 512
+            val f = onDisk[e.key.lowercase() + "." + e.ext.lowercase()] ?: return@filter false
+            f.length() > 512
         }
-        /*
-         * 账本本身读坏了的时候，只能用扫目录扫出来的这份**临时**给界面看，
-         * 不能写回盘上 —— 那等于拿一千条「没留下字」把原文全替了。
-         */
+        /* 账本本身读坏了的时候，只能用扫目录扫出来的这份临时给界面看，不能写回盘上 —— 那等于拿一千条「没留下字」把原文全替了。 */
         if (!ledgerBroken && (dirty || alive.size != list.size)) ledgerSave(alive)
         return alive.sortedByDescending { it.at }
     }

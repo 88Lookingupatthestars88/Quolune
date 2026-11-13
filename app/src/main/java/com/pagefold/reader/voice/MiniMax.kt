@@ -9,26 +9,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/**
- * MiniMax 语音合成（同步口）。
- *
- *   POST {base}/v1/t2a_v2
- *   Authorization: Bearer <key>
- *   {
- *     "model": "speech-2.8-hd",
- *     "text": "...",
- *     "stream": false,
- *     "voice_setting": { "voice_id": "audiobook_male_1", "speed": 1.0, "vol": 1.0, "pitch": 0, "emotion": "calm" },
- *     "audio_setting": { "sample_rate": 32000, "bitrate": 128000, "format": "mp3", "channel": 1 },
- *     "output_format": "hex"
- *   }
- *
- * 回来的是 JSON，音频在 `data.audio`，是**十六进制字符串**，不是 base64。
- * 另外 HTTP 200 不等于成功 —— 必须看 `base_resp.status_code == 0`。
- *
- * 情绪走 `voice_setting.emotion` 这个枚举字段，不写自然语言 ——
- * 自然语言描述会被模型当成台词念出来，这家的枚举刚好够用。
- */
+/** MiniMax 语音合成（同步口）。 */
 object MiniMax {
 
     private val json = "application/json".toMediaType()
@@ -88,13 +69,7 @@ object MiniMax {
             append("\"pitch\":").append(pitch.coerceIn(-12, 12))
             emotionOf(style)?.let { append(",\"emotion\":").append(quote(it)) }
             append("},")
-            /*
-             * voice_modify 是另一层：改的不是高低快慢，是嗓子的质地。
-             *   pitch      −100 更低沉 … 100 更明亮
-             *   intensity  −100 更刚劲 … 100 更轻柔
-             *   timbre     −100 更浑厚 … 100 更清脆
-             * 三根都是 0 就是不动，这一整块不发。
-             */
+            /* voice_modify 是另一层：改的不是高低快慢，是嗓子的质地。 */
             if (bright != 0 || soft != 0 || clear != 0 || fx.isNotBlank()) {
                 append("\"voice_modify\":{")
                 val parts = ArrayList<String>(4)
@@ -108,11 +83,7 @@ object MiniMax {
             }
             append("\"audio_setting\":{\"sample_rate\":32000,\"bitrate\":128000,")
             append("\"format\":\"mp3\",\"channel\":1},")
-            /*
-             * 语种增强：让它认得更准，小语种和方言才用得上。
-             * 文本归一化 quality 会把数字、年月日先读成话再送进去，质量高一点，慢一点。
-             * 两样都是空就不发。
-             */
+            /* 语种增强：让它认得更准，小语种和方言才用得上。 */
             if (boost.isNotBlank()) append("\"language_boost\":").append(quote(boost)).append(",")
             if (norm.isNotBlank()) append("\"text_normalization_mode\":").append(quote(norm)).append(",")
             append("\"output_format\":\"hex\"}")

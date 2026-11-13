@@ -14,22 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-/**
- * 「让 AI 排」这件事的状态机。
- *
- * 为什么放在 object 里而不是页面里：用户要能中途走开。派角是一张半屏的纸，
- * 退回书架、翻两页书，这一趟都该接着跑 —— 状态挂在 Composable 上，纸一收
- * 协程就没了，回来看到的是「什么都没发生」。
- *
- * 五步，一步一步来：
- *   PICK   开着的接口不止一路时先问用哪一路；只有一路就跳过
- *   DETAIL 详细（每人带一句台词）还是简单（只报名字）
- *   NAMES  这一趟发哪些人、不发哪些人；不发的人他那些话怎么办，这一页说清
- *   RUN    真发。一批一个请求，进度是实数
- *   PLAN   排回来的东西，一组一行，挨个点「用」还是「不用」
- *
- * 分批不为快，为三件事：进度报得出来、上下文不炸、断了能从断的地方接。
- */
+/** 「让 AI 排」这件事的状态机。 */
 object AiJob {
 
     enum class Step { PICK, DETAIL, NAMES, RUN, PLAN }
@@ -61,19 +46,10 @@ object AiJob {
 
     var pool by mutableStateOf<List<CastName>>(emptyList())
 
-    /**
-     * 门槛：几句话以上才发。用户自己写，默认 50。
-     *
-     * 上一版写死 3，退出再进来又变回 3 —— 它根本没存。现在这一格跟着
-     * [Settings.aiGate] 走，进来读到什么就是什么。
-     */
+    /** 门槛：几句话以上才发。用户自己写，默认 50。 */
     var gate by mutableStateOf(50)
 
-    /**
-     * 这一次发出去的「怎么分」。空 = 出厂那份（[Assign.ASK]）。
-     *
-     * 三级：这本书自己的 > 全局（[Settings.aiPrompt]）> 出厂。
-     */
+    /** 这一次发出去的「怎么分」。空 = 出厂那份（[Assign.ASK]）。 */
     var ask by mutableStateOf("")
 
     /** 手改过的名字。调门槛不再覆盖它 —— 用户点过的就是他说了算。 */
@@ -85,12 +61,7 @@ object AiJob {
     /** 每人挑给模型看的那一句。名字 → 那句话。空 = 还没挑，用默认。 */
     var picks1 by mutableStateOf<Map<String, String>>(emptyMap())
 
-    /**
-     * 允许模型自己造新嗓音。
-     *
-     * 上一版这一格等于「小米开着没有」——开着就一定造，且看不见现成的。
-     * 现在是用户自己的选择：默认不造，先从库里挑。
-     */
+    /** 允许模型自己造新嗓音。 */
     var design by mutableStateOf(false)
 
     /** 允许模型挑的那些现成嗓音。全选默认。 */
@@ -139,7 +110,6 @@ object AiJob {
 
     /**
      * 摊开这张纸。入口只有两个：派角页那颗按钮，和顶上那条横幅。
-     *
      * @return 空 = 开了；非空 = 开不了，那句话就是原因。
      */
     fun begin(
@@ -149,11 +119,7 @@ object AiJob {
     ): String? {
         app = a
         val now = a.field.now
-        /*
-         * 「能用」的那几路：开着、地址有、钥匙有、模型挑过。
-         * 只开一路时这一步不问，直接用；开了两路以上才让用户挑 ——
-         * 上回是排在前面那一路，用户根本不知道谁在替他拿主意。
-         */
+        /* 「能用」的那几路：开着、地址有、钥匙有、模型挑过。 */
         val ready = now.chats.filter {
             it.on && Chats.why(it) == null && (it.model ?: "").isNotBlank()
         }
@@ -163,12 +129,7 @@ object AiJob {
         if (list.isEmpty() && cast.pins.none { it.who.isNotBlank() }) return "名单是空的，先数一遍人"
 
         val des = now.engines.any { it.on && it.src == com.pagefold.reader.field.VoiceSource.MIMO }
-        /*
-         * 现成的嗓子，永远取。
-         *
-         * 上一版是「开着小米就当没有清单」，于是模型每组造一副新的，
-         * 音色库里那几十副它一次都没看见。先让它挑，挑不出来再让它造。
-         */
+        /* 现成的嗓子永远取，跟名单一起发给模型。 */
         val voices = Catalog.groups(now.engines, a.box.custom()).flatMap { it.second }
         if (voices.isEmpty() && !des) return "先去定音里开一路声源"
 
@@ -177,13 +138,7 @@ object AiJob {
         picks = ready
         chatId = ready.first().id
         deep = true
-        /*
-         * 句数要带上「单句改派」。
-         *
-         * 名单里那个数是数人时扫出来的；用户在书里点一句改成某人，名单不知道。
-         * 不带上的话这个人写着 0 句，门槛 100 一筛就发不出去 —— 而用户明明
-         * 已经给他指了一句话（「发哪些人」那一页他看着就是 0 句）。
-         */
+        /* 句数要带上「单句改派」。名单里那个数是数人时扫出来的；用户在书里点一句改成某人，名单不知道。 */
         val pinN = HashMap<String, Int>(16)
         cast.pins.forEach { p -> if (p.who.isNotBlank()) pinN[p.who] = (pinN[p.who] ?: 0) + 1 }
         val withPins = ArrayList<com.pagefold.reader.book.CastName>(list.size + pinN.size)
@@ -201,10 +156,8 @@ object AiJob {
         auto.clear()
         sent = pool.filter { it.lines >= gate }.map { it.name }.toSet()
         /*
-         * 起手这一档照**定音 · 派角**那一节来。
-         *
-         * 上一版是「小米开着就一定要造」，用户每本书都得进去把这件事按回来；
-         * 现在两点都在设置里定：准不准它造、准它用哪几副。书里那张纸只能临时改。
+         * 起手这一档照定音 · 派角那一节来。
+         * 书里那张纸只能临时改。
          */
         val want = now.aiVoiceSet
         val poolNames = voices.map { it.name }
@@ -238,19 +191,10 @@ object AiJob {
         return null
     }
 
-    /**
-     * 改门槛。
-     *
-     * 手点过的名字不跟门槛走 —— 他点过「发」，门槛调到 50 也不该把它摘掉。
-     */
+    /** 改门槛。手点过的名字不跟门槛走 —— 他点过「发」，门槛调到 50 也不该把它摘掉。 */
     fun gateTo(g: Int) {
         gate = g.coerceIn(1, 9999)
-        /*
-         * 存进全局那一格。
-         *
-         * 上一版只改了这一趟的内存值，纸一关就没了 —— 退出再进来又变回 3。
-         * 门槛是口味，不是一次性的选择。
-         */
+        /* 存进全局那一格，纸关掉也不丢。 */
         app?.field?.edit { it.copy(aiGate = gate) }
         val on = pool.filter { touched[it.name] ?: (it.lines >= gate) }.map { it.name }.toSet()
         sent = on
@@ -278,12 +222,7 @@ object AiJob {
         val bm = a.shelf.find(id) ?: return
         val cb = runCatching { com.pagefold.reader.book.RuleCodec.fromJson(bm.castJson) }
             .getOrDefault(com.pagefold.reader.book.CastBook())
-        /*
-         * 存的是这一趟**实际写的**（可能是空）。
-         *
-         * 存 askNow() 的话，「照默认来」会把出厂那段抄进这本书 —— 以后改全局
-         * 这本书就不跟着走了，看着像「改了没反应」。
-         */
+        /* 存的是这一趟实际写的（可能是空）。 */
         a.shelf.setCast(id, com.pagefold.reader.book.RuleCodec.toJson(cb.copy(prompt = ask.trim())))
         bookBook = cb.copy(prompt = ask.trim())
     }
@@ -302,12 +241,7 @@ object AiJob {
         sent = if (now) sent + name else sent - name
     }
 
-    /**
-     * 这个人给模型看的那一句。
-     *
-     * 默认取句库里**最长**的头五句之一 —— 短句多是「嗯」「是」「好」，
-     * 拿它判身份等于没给材料。用户挑过或改过的，以用户的为准。
-     */
+    /** 这个人给模型看的那一句。默认取句库里最长的头五句之一 —— 短句多是「嗯」「是」「好」，拿它判身份等于没给材料。 */
     fun sampleOf(p: CastName): String {
         picks1[p.name]?.let { return it }
         auto[p.name]?.let { return it }
@@ -331,12 +265,7 @@ object AiJob {
         picks1 = picks1 - name
     }
 
-    /**
-     * 现在要发出去的那段话。
-     *
-     * 摆原文，不摆摘要 —— 「点进去看」要看到的就是模型真会收到的东西。
-     * 上限一万二千字，再多界面也画不动，而且那时已经该分批发完了。
-     */
+    /** 现在要发出去的那段话。摆原文，不摆摘要 —— 「点进去看」要看到的就是模型真会收到的东西。 */
     fun preview(): String {
         val who = pool.filter { it.name in sent }
         if (who.isEmpty()) return "一个人都没选。"
@@ -356,9 +285,7 @@ object AiJob {
 
     /**
      * 这一趟还没结束 —— 纸关着但活儿还在，或者结果还没看。
-     *
-     * 派角页那颗按钮看它：在排的时候点进去要**回到那个任务**，
-     * 不能再 begin 一次把进度清掉。上一版就是这么把在跑的活儿弄丢的。
+     * 派角页那颗按钮看它：在排的时候点进去要回到那个任务，不能再 begin 一次把进度清掉。
      */
     val alive: Boolean
         get() = open || fresh || plan != null || job != null ||
@@ -388,14 +315,7 @@ object AiJob {
         stage = "停住了"
     }
 
-    /**
-     * 往回退一步。
-     *
-     * 退到没有上一级了就**把这张纸收掉**，回到派角。
-     *
-     * 上一版这里只改 `step`：只开了一路接口时，「怎么分配」的上一级就是它自己，
-     * 按多少下都停在同一屏 —— 用户说的「怎么分配这里的返回，点击多次没有用」。
-     */
+    /** 往回退一步。退到没有上一级了就把这张纸收掉，回到派角。 */
     fun back() {
         when (step) {
             Step.PICK -> open = false
@@ -501,12 +421,7 @@ object AiJob {
         p.drop.forEach { d -> if (d.name !in seen && d.name !in gone) gone[d.name] = d.why }
     }
 
-    /**
-     * 落盘。
-     *
-     * 只写点着「用」的那几组；点掉的那几组不当没出现过 —— 并进「旁白」那一组。
-     * 那几个人原来散在别的组里，若不一并摘出来，改嗓子时看着像「改了没反应」。
-     */
+    /** 落盘。只写点着「用」的那几组；点掉的那几组不当没出现过 —— 并进「旁白」那一组。 */
     fun apply() {
         val a = app ?: return
         val p = plan ?: return
@@ -594,12 +509,7 @@ object AiJob {
     }
 
     /** 重排一遍：这一趟的结果全丢掉，从头发。 */
-    /**
-     * 退出这一份结果，什么都不改。
-     *
-     * 跟 [again] 不一样：again 是「再排一次」（要再等一轮请求），这个是「这份不要了」。
-     * 上一版这一格叫「重排」，用户点下去只是想退出去，结果又发起一整趟请求。
-     */
+    /** 退出这一份结果，什么都不改。 */
     fun discard() {
         job?.cancel()
         job = null
