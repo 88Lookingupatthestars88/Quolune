@@ -26,6 +26,14 @@ class App : Application() {
     lateinit var synth: Synth
         private set
 
+    /**
+     * 应用级的长活。
+     * 离开页面也要跑完的活挂这儿 —— 一次删一千段念过的，不能用户一退出就停在半路。
+     */
+    val work = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+
     override fun onCreate() {
         super.onCreate()
         installCrashLog()
@@ -37,6 +45,8 @@ class App : Application() {
         synth = Synth(this, sys)
         // 每副音色自己那份调法，合成层要用它改语速、音调、音量。
         synth.tunes = vtune
+        // 签子（谁在说话）的账落盘：大书重进时不用把规则整本再跑一遍。
+        com.pagefold.reader.book.Marks.attach(filesDir)
         synth.sync(field.now)
         // 给「验过的结论」一个落盘的地方，不接就只在内存里记。
         com.pagefold.reader.voice.Speak.attach(this)

@@ -226,10 +226,10 @@ val PaperNight = PaperInk.copy(
 
 /** 四套主题，每套含明暗两个变体。界面只认这 4 个 key。 */
 enum class ThemeId(val key: String, val label: String, val tagline: String, val light: Skin, val dark: Skin) {
-    GLASS("glass", "玻璃", "雨珠挂在玻璃上，灯化开了，字还清楚", GlassDawn, GlassNight),
+    GLASS("glass", "玻璃", "玻璃质感，体验不一样的感觉", GlassDawn, GlassNight),
     FROST("frost", "磨砂", "旧石阶淋过雨，指腹上留一层砂", FrostBone, FrostSlate),
-    HUD("hud", "科幻", "铜盘上的星图，一格一格挪", HudLab, HudVoid),
-    PAPER("paper", "纸墨", "松烟研开，纸还软，朱砂没干", PaperInk, PaperNight);
+    HUD("hud", "科幻", "未来的感觉现在体验", HudLab, HudVoid),
+    PAPER("paper", "纸墨", "体验书籍的感觉", PaperInk, PaperNight);
 
     fun skin(dark: Boolean) = if (dark) this.dark else this.light
 

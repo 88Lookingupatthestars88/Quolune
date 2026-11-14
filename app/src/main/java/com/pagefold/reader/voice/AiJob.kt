@@ -166,7 +166,7 @@ object AiJob {
         voiceAll = poolNames
         voiceUse = if (want == null) poolNames.toSet() else poolNames.filter { it in want }.toSet()
         if (voiceUse.isEmpty() && !design) {
-            return "一副嗓子都没准它用。去定音 · 派角里挑几副，或者打开「准它自己造嗓音」"
+            return "一副嗓子都没准它用。去定音 · 派角里挑几副，或者打开「让 AI 新造嗓音」"
         }
         voiceNames = voiceUse.ifEmpty { poolNames.toSet() }
         /* 这本书自己写过的口径优先，其次是全局那份，都没有就是出厂那份。 */

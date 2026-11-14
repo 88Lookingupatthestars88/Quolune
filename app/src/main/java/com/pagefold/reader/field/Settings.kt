@@ -109,6 +109,8 @@ data class Settings(
     val aiDesign: Boolean = false,
     /** 准它用的那几副嗓子，逗号分隔。 */
     val aiVoices: String = "",
+    /** 派角里那一串嗓子的展开状态。默认展开；收起来之后下次进来还是收着。 */
+    val aiVoiceOpen: Boolean = true,
 ) {
     val turn: TurnMode get() = runCatching { TurnMode.valueOf(turnMode) }.getOrDefault(TurnMode.FLIP)
     val engineKind: EngineKind get() = runCatching { EngineKind.valueOf(engine) }.getOrDefault(EngineKind.MIMO)

@@ -620,6 +620,33 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return gone
     }
 
+    /**
+     * 一次删一批。
+     *
+     * 上一版是一条一条来：每删一条都把整本 clips.json 读一遍再写一遍，还拷一份备份。
+     * 一千条就是一千次读、一千次写，删到一半应用就卡死了。
+     * 现在文件逐个删，账本只落一次。
+     *
+     * @param onTick 每删一批报一次「删到第几条」。给界面画进度用；回调在调用线程上跑。
+     * @return 真删掉文件的条数
+     */
+    fun dropAll(keys: Collection<String>, onTick: ((Int) -> Unit)? = null): Int {
+        if (keys.isEmpty()) return 0
+        var n = 0
+        var gone = 0
+        keys.forEach { key ->
+            n++
+            listOf("wav", "mp3").forEach { ext ->
+                val f = File(cacheDir, key + "." + ext)
+                if (f.exists() && f.delete()) gone++
+            }
+            if (onTick != null && n % 64 == 0) onTick(n)
+        }
+        ledgerSave(ledgerLoad().filterNot { it.key in keys })
+        onTick?.invoke(n)
+        return gone
+    }
+
     fun usage(): Pair<Long, Int> {
         val files = cacheDir.listFiles() ?: return 0L to 0
         var total = 0L

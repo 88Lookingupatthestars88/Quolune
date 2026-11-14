@@ -27,14 +27,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.pagefold.reader.App
 import com.pagefold.reader.book.Cast
 import com.pagefold.reader.book.CastProfile
 import com.pagefold.reader.book.Chapter
+import com.pagefold.reader.book.Line
 import com.pagefold.reader.book.Lines
 import com.pagefold.reader.book.Pin
 import com.pagefold.reader.book.Quote
@@ -449,12 +453,15 @@ internal fun LedgerSheet(
     pins: List<Pin>,
     roles: List<String>,
     onPin: (ch: Int, at: Int, who: String) -> Unit,
+    /** 点「跳到这一句」：回正文那一处。空 = 从定音进来，没有书可跳。 */
+    onJump: ((ch: Int, at: Int) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val s = LocalSkin.current
     /* 从哪一章开始看。用户是从派角页点进来的，那时他正在读某一章 —— 台账一开就停在第 1 章、还得自己翻回去，这不叫「按顺序通看」。 */
     var ch by remember(bookId) { mutableStateOf(startCh.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))) }
-    var rows by remember(bookId) { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
+    /* 整句留着，不只留人名。只写名字的时候连着十行「赵惊鸿」，谁也认不出是哪一句。 */
+    var rows by remember(bookId) { mutableStateOf<List<com.pagefold.reader.book.Line>>(emptyList()) }
     var busy by remember(bookId) { mutableStateOf(false) }
     var fixing by remember { mutableStateOf<Int?>(null) }
 
@@ -469,9 +476,7 @@ internal fun LedgerSheet(
             val bm = app.shelf.find(bookId)
             val cb = RuleCodec.fromJson(bm?.castJson.orEmpty().ifBlank { app.field.now.castJson })
             val pins = cb.pins.filter { it.ch == ch }.associate { it.at to it.who }
-            Cast.plan(t, profOf(app, bookId), 0, pins)
-                .filter { it.isDialog }
-                .map { it.srcStart to it.speaker }
+            Cast.plan(t, profOf(app, bookId), 0, pins).filter { it.isDialog }
         }.getOrDefault(emptyList())
         rows = got
         busy = false
@@ -525,11 +530,10 @@ internal fun LedgerSheet(
         }
 
         LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-            itemsIndexed(rows, key = { _, r -> "r" + r.first }) { _, r ->
-                val at = r.first
-                val who = r.second
+            itemsIndexed(rows, key = { _, r -> "r" + r.srcStart }) { _, ln ->
+                val at = ln.srcStart
                 val pin = pins.firstOrNull { it.ch == ch && it.at == at }
-                val real = pin?.who ?: who
+                val real = pin?.who ?: ln.speaker
                 Column(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.fillMaxWidth()
@@ -537,16 +541,27 @@ internal fun LedgerSheet(
                             .padding(vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        T(
-                            real.ifBlank { "未识别出" },
-                            size = 12,
-                            color = if (real.isBlank()) s.inkFaint else if (pin != null) s.flame else s.ink,
-                            modifier = Modifier.weight(1f), maxLines = 1,
-                        )
-                        T(
-                            if (pin != null) "改过" else "改", size = 10,
-                            color = if (pin != null) s.flame else s.inkFaint,
-                        )
+                        Column(Modifier.weight(1f)) {
+                            /* 先说这一句归谁，再说他说了什么。连着十行同一个人时，看的是下面那行字。 */
+                            T(
+                                real.ifBlank { "未识别出" } + if (pin != null) " · 改过" else " · 改",
+                                size = 11,
+                                color = if (real.isBlank()) s.inkFaint else if (pin != null) s.flame else s.inkDim,
+                                maxLines = 1,
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            T(ln.text, size = 12, color = s.ink, maxLines = 2)
+                        }
+                        if (onJump != null) {
+                            Spacer(Modifier.width(8.dp))
+                            T(
+                                "跳到 ›", size = 10, color = s.flame,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .tap { onJump(ch, at) }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            )
+                        }
                     }
                     Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.05f)))
                 }
@@ -565,7 +580,7 @@ internal fun LedgerSheet(
         PickWho(
             title = "这一句归谁",
             roles = roles,
-            current = rows.firstOrNull { it.first == at }?.second
+            current = rows.firstOrNull { it.srcStart == at }?.speaker
                 ?.ifBlank { null }
                 ?: pins.firstOrNull { it.ch == ch && it.at == at }?.who,
             onPick = { who ->

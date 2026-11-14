@@ -830,6 +830,7 @@ fun CastScreen(
                     val keep = cast.pins.filterNot { it.ch == ch && it.at == at }
                     save(cast.copy(pins = keep + com.pagefold.reader.book.Pin(ch, at, who, e)), null)
                 },
+                onJump = onJump,
                 onClose = { ledger = false },
             )
         }
@@ -2116,14 +2117,14 @@ private fun AskSheet(onClose: () -> Unit) {
             Modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            T("允许它自己造嗓音", size = 13, modifier = Modifier.weight(1f))
+            T("让 AI 新造嗓音", size = 13, modifier = Modifier.weight(1f))
             Pill(AiJob.design, { AiJob.design = it })
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(s.hairSoft))
 
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            T("准它用的嗓子", size = 13, modifier = Modifier.weight(1f))
+            T("让 AI 使用的嗓音", size = 13, modifier = Modifier.weight(1f))
             T(
                 "${AiJob.voiceUse.size} / ${AiJob.voiceAll.size}",
                 size = 10, color = s.inkFaint,

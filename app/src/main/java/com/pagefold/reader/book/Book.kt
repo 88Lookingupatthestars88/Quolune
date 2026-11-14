@@ -22,6 +22,8 @@ data class BookMeta(
     val addedAt: Long,
     val openedAt: Long = 0L,
     val chapterIndex: Int = 0,
+    /** 这一章在书里叫「第几章」。目录开头常有一个「序」，它没有章号 —— 拿位置 + 1 当章号会多算一章。0 = 还没写过，退回位置 + 1。 */
+    val chapterNo: Int = 0,
     val charOffset: Int = 0,
     val progress: Float = 0f,
     val tintSeed: Int = 0,
@@ -118,13 +120,14 @@ class Shelf(ctx: Context) {
         return list
     }
 
-    fun touch(id: String, chapter: Int, offset: Int, progress: Float): List<BookMeta> {
+    fun touch(id: String, chapter: Int, offset: Int, progress: Float, chapterNo: Int = 0): List<BookMeta> {
         val list = all().toMutableList()
         val i = list.indexOfFirst { it.id == id }
         if (i >= 0) {
             list[i] = list[i].copy(
                 chapterIndex = chapter, charOffset = offset,
-                progress = progress, openedAt = System.currentTimeMillis()
+                progress = progress, openedAt = System.currentTimeMillis(),
+                chapterNo = chapterNo,
             )
             save(list)
         }

@@ -163,7 +163,7 @@ fun LibraryScreen(
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
-                        start = Sz.gutter, end = Sz.gutter, top = 4.dp, bottom = 34.dp
+                        start = Sz.gutter, end = Sz.gutter, top = 4.dp, bottom = 54.dp
                     ),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(22.dp),
@@ -368,7 +368,7 @@ private fun ContinueBar(b: BookMeta, onOpen: () -> Unit) {
                     Spacer(Modifier.width(6.dp))
                     Box(Modifier.width(3.dp).height(3.dp).clip(CircleShape).background(s.inkFaint))
                     Spacer(Modifier.width(6.dp))
-                    MicroLabel("第 ${b.chapterIndex + 1} 章 · ${(b.progress * 100).toInt()}%")
+                    MicroLabel(chapterLabel(b))
                 }
                 Spacer(Modifier.height(6.dp))
                 T(b.title, size = 15, weight = FontWeight.SemiBold, maxLines = 2, family = s.titleFont)
@@ -475,12 +475,18 @@ private fun BookTile(b: BookMeta, reading: Boolean, onOpen: () -> Unit, onHold: 
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            if (b.openedAt > 0) "第 ${b.chapterIndex + 1} 章 · ${(b.progress * 100).toInt()}%"
+            if (b.openedAt > 0) chapterLabel(b)
             else "${b.chapters} 章",
             fontSize = 10.sp, color = s.inkFaint, maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/** 架上那一行只写「第几章」。章号取书里写的那个数，不拿位置 + 1 去猜。 */
+private fun chapterLabel(b: BookMeta): String {
+    val no = if (b.chapterNo > 0) b.chapterNo else b.chapterIndex + 1
+    return "第 $no 章"
 }
 
 /** 封面。用户换过就用他那张；没换过就现画一块纸。 */

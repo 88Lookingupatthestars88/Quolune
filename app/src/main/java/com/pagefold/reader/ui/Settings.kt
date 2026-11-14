@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -383,7 +384,7 @@ private fun TuneScreen(
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
                     Quiet {
                         Column(Modifier.padding(vertical = 6.dp)) {
-                            RowLine("准它自己造嗓音") {
+                            RowLine("让 AI 新造嗓音") {
                                 Pill(s.aiDesign) { on ->
                                     if (on && !s.canDesign) {
                                         msg = "造嗓音要小米那一路开着。先去「声源」里把它拨开"
@@ -392,12 +393,18 @@ private fun TuneScreen(
                                     }
                                 }
                             }
+                            /* 这一行回答「为什么打开了它还是只从现成的里挑」——现造嗓音只有小米能做。 */
+                            Text(
+                                "只限 MiMo 引擎。",
+                                fontSize = 11.sp, color = skin.inkFaint,
+                                modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                            )
                             Hair()
                             Spacer(Modifier.height(8.dp))
                             AiVoicePick(s, app) { msg = it }
                             Hair()
                             Spacer(Modifier.height(8.dp))
-                            AiAskField(s, app) { msg = it }
+                            AiAskField(s)
                         }
                     }
                 }
@@ -1464,7 +1471,8 @@ private fun ChatBlock(
         InlineField("钥匙", key, { key = it; push() }, "sk-…", secret = true, sanitize = Auth::clean)
         InlineField("模型", model, { model = it; push() }, "填完钥匙自动挑")
         if (fetched.isNotEmpty()) {
-            Chips(fetched.take(40), model) { model = it; push() }
+            /* 全交给 Chips：前面 12 个摆出来，剩下的收进「还有 N 个」。 */
+            Chips(fetched, model) { model = it; push() }
         }
         /*
          * 「刷新清单」一直都在。清单是问过就摆着、不再自己重问的（跟声源一样）。
@@ -1505,6 +1513,8 @@ private fun ChatBlock(
  * 一排可选的字。点一下就换成那个。
  * @param multi  true = 多选（音色那一栏用），点一下加、再点一下去掉
  * @param picked 多选时当前选中的
+ * @param open   true = 全铺开，false = 只铺前 [CAP_CHIPS] 个、末尾留一个「还有 N 个」
+ * @param onOpen 末尾那个「还有 N 个」被点到了
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1513,20 +1523,21 @@ private fun Chips(
     current: String,
     multi: Boolean = false,
     picked: List<String> = emptyList(),
+    open: Boolean = false,
+    onOpen: (() -> Unit)? = null,
     onPick: (String) -> Unit,
 ) {
     val s = LocalSkin.current
     if (options.isEmpty()) return
+    /* 没接外部状态的那几处（声源、模型清单）自己记展开；派角那一处走 Settings，退出应用也留着。 */
+    var inner by remember(options.size) { mutableStateOf(false) }
+    val isOpen = if (onOpen == null) inner else open
     /*
      * 换行排，不横滚：横滑看不出后面还有几条。
      * 全铺进 FlowRow，每次测量都要量几百个子项 —— 定音一滚就掉帧。
      */
-    val head = remember(options, current) {
-        if (current.isBlank() || options.indexOf(current) < 0) options
-        else listOf(current) + options.filter { it != current }
-    }
-    var open by remember(options.size) { mutableStateOf(false) }
-    val shown = if (open || head.size <= CAP_CHIPS) head else head.take(CAP_CHIPS)
+    val head = options
+    val shown = if (isOpen || head.size <= CAP_CHIPS) head else head.take(CAP_CHIPS)
     FlowRow(
         Modifier.fillMaxWidth().padding(top = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1547,14 +1558,16 @@ private fun Chips(
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             )
         }
-        if (!open && head.size > CAP_CHIPS) {
+        if (!isOpen && head.size > CAP_CHIPS) {
+            /* 这一格得像个能按的东西：外面一道边、朱色字。不然看着只是一行灰字，没人会去点。 */
             Text(
-                "还有 ${head.size - CAP_CHIPS} 个",
+                "展开 ${head.size - CAP_CHIPS} 个",
                 fontSize = 11.sp,
-                color = s.inkFaint,
+                color = s.flame,
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .tap { open = true }
+                    .border(1.dp, s.flame.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .tap { if (onOpen != null) onOpen() else inner = true }
                     .padding(horizontal = 10.dp, vertical = 6.dp)
             )
         }
@@ -1716,7 +1729,11 @@ internal fun NavLine(title: String, sub: String, onClick: () -> Unit) {
     }
 }
 
-/** 准它用哪几副嗓子。「一副不给」必须存得下来 —— 空白既表示「全给」，把最后一副点掉就会自己全亮回来。 */
+/**
+ * 让 AI 用哪几副嗓子。
+ * 「一副不给」必须存得下来 —— 空白既表示「全给」，把最后一副点掉就会自己全亮回来。
+ * 展开状态存在 [Settings.aiVoiceOpen] 里：用户铺开过一次，下次进来还是铺开的。
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
@@ -1729,14 +1746,24 @@ private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
 
     Column(Modifier.padding(vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("准它用的嗓子", fontSize = 15.sp, color = skin.ink, modifier = Modifier.weight(1f))
+            Text("让 AI 使用的嗓音", fontSize = 15.sp, color = skin.ink, modifier = Modifier.weight(1f))
             Text("${picked.size} / ${all.size}", fontSize = 11.sp, color = skin.inkFaint)
         }
+        /* 这一行回答「我在这儿挑了嗓子，为什么书里还是派给别人」——它管的是整本书的派角。 */
+        Text(
+            "整本书「让 AI 排」的时候，只从这几副里派。",
+            fontSize = 11.sp, color = skin.inkFaint, lineHeight = 17.sp,
+            modifier = Modifier.padding(top = 2.dp),
+        )
         if (all.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Text("音色库里一副都没有。先去「声源」里开一路。", fontSize = 11.sp, color = skin.inkFaint)
         } else {
-            Chips(all, "", multi = true, picked = picked.toList()) { n ->
+            Chips(
+                all, "", multi = true, picked = picked.toList(),
+                open = s.aiVoiceOpen,
+                onOpen = { app.field.edit { it.copy(aiVoiceOpen = true) } },
+            ) { n ->
                 val next = if (n in picked) picked - n else picked + n
                 app.field.edit {
                     it.copy(
@@ -1756,6 +1783,9 @@ private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
                     { app.field.edit { it.copy(aiVoices = com.pagefold.reader.field.AI_NO_VOICE) } },
                     BtnKind.GHOST,
                 )
+                if (s.aiVoiceOpen) {
+                    Btn("收起", { app.field.edit { it.copy(aiVoiceOpen = false) } }, BtnKind.GHOST)
+                }
             }
         }
     }
@@ -1763,38 +1793,35 @@ private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
 
 /** 发给它的那段话。名单和返回格式不在这儿 —— 那两段是接口约定，改了整份结果就解析不出来。 */
 @Composable
-private fun AiAskField(s: Settings, app: App, say: (String) -> Unit) {
+private fun AiAskField(s: Settings) {
     val skin = LocalSkin.current
-    /* 初值只取一次。写成 remember(s.aiPrompt) 的话，每敲一个字都改一次设置 → key 变 → 状态重建。 */
-    var text by remember { mutableStateOf(s.aiPrompt) }
+    /* 这段是发出去的原样，只给人看，不给改 —— 改一个字整份结果就可能解析不出来。 */
+    val text = s.aiPrompt.ifBlank { Assign.ASK }
+    var open by remember { mutableStateOf(false) }
 
     Column(Modifier.padding(vertical = 6.dp)) {
         Text("发给它的话", fontSize = 15.sp, color = skin.ink)
         Spacer(Modifier.height(8.dp))
-        /* 一段真能改的字。出厂那段只在空着时当占位。 */
         Box(
-            Modifier.fillMaxWidth().heightIn(min = 190.dp)
+            Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(9.dp))
                 .background(skin.panelSink)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            BasicTextField(
-                value = text,
-                onValueChange = { t ->
-                    text = t.take(1600)
-                    app.field.edit { it.copy(aiPrompt = text) }
-                },
-                textStyle = TextStyle(fontSize = 12.sp, color = skin.ink, lineHeight = 19.sp),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(skin.flame),
-                modifier = Modifier.fillMaxWidth().fillMaxSize(),
+            Text(
+                text,
+                fontSize = 12.sp, color = skin.inkDim, lineHeight = 19.sp,
+                /* 收起时露七行，够看出这一段在讲什么。 */
+                maxLines = if (open) Int.MAX_VALUE else 7,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             )
-            if (text.isBlank()) {
-                Text(
-                    Assign.ASK, fontSize = 12.sp, color = skin.inkFaint, lineHeight = 19.sp,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
         }
+        Spacer(Modifier.height(8.dp))
+        Btn(
+            if (open) "收起" else "展开看全文",
+            { open = !open },
+            BtnKind.GHOST,
+        )
     }
 }
 
@@ -1817,7 +1844,14 @@ internal fun Pill(on: Boolean, onChange: (Boolean) -> Unit) {
     }
 }
 
-/** 底部弹层。用真 Dialog，不用页内 Box —— 页内 Box 有两个治不好的病：点空白处焦点不散。 */
+/**
+ * 底部弹层。用真 Dialog，不用页内 Box —— 页内 Box 有两个治不好的病：点空白处焦点不散、
+ * 盖不住底栏。
+ *
+ * 状态栏那一段一律不让。上一版在窗口给得对的机器上还加了一次 statusBars 的 padding，
+ * 而窗口顶本来就已经落在状态栏下面 —— 多让那一次，整张纸就往下挪一个状态栏的高，
+ * 底下那颗按钮正好掉出屏幕（K90 Pro Max 上就是这个）。
+ */
 @Composable
 internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
     val s = LocalSkin.current
@@ -1845,33 +1879,29 @@ internal fun Overlay(onClose: () -> Unit, content: @Composable () -> Unit) {
             decorFitsSystemWindows = false,
         ),
     ) {
-        Box(
-            Modifier.fillMaxSize()
-                .background(s.scrim.copy(alpha = s.scrim.alpha * rise.value))
-                .tap { shut() }
-        ) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            /* 纸最多长到「窗口高减状态栏」。内容再多就自己滚，别顶到屏幕外面去。 */
+            val cap = maxHeight - with(d) { geom[1].toDp() }
             Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .graphicsLayer {
-                        // 窗口越出去多少就抬回来多少。lift 为 0 的机器上，这一项是零。
-                        translationY = (1f - rise.value) * 44.dp.toPx() - lift
-                        alpha = rise.value
-                    }
-                    .then(
-                        /* 窗口给得对的机器（lift = 0）：照旧让 Compose 的 insets 说话 ——键盘、导航条、状态栏三样都让。 */
-                        if (lift == 0) Modifier.windowInsetsPadding(
-                            WindowInsets.ime
-                                .union(WindowInsets.navigationBars)
-                                .union(WindowInsets.statusBars)
-                        ) else Modifier.padding(
-                            top = with(d) { geom[1].toDp() },
-                            bottom = with(d) { maxOf(geom[2], imePx).toDp() },
-                        )
-                    )
-                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                    .background(s.surface)
-                    .tap {}
-            ) { content() }
+                Modifier.fillMaxSize()
+                    .background(s.scrim.copy(alpha = s.scrim.alpha * rise.value))
+                    .tap { shut() }
+            ) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .graphicsLayer {
+                            // 窗口越出去多少就抬回来多少。lift 为 0 的机器上，这一项是零。
+                            translationY = (1f - rise.value) * 44.dp.toPx() - lift
+                            alpha = rise.value
+                        }
+                        /* 底下让给导航条和键盘。顶上一点都不让 —— 见上面那段。 */
+                        .padding(bottom = with(d) { maxOf(geom[2], imePx).toDp() })
+                        .heightIn(max = cap)
+                        .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                        .background(s.surface)
+                        .tap {}
+                ) { content() }
+            }
         }
     }
 }

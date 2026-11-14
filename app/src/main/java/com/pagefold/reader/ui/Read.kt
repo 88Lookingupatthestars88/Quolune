@@ -165,6 +165,21 @@ import kotlin.math.roundToInt
 
 // ───────────────────────── 书的骨架：章 → 段 → 块 ─────────────────────────
 
+/**
+ * 眼睛停在哪。
+ * 翻页那一格把当前位置记这儿，退出这一页时再按它落盘一次 ——
+ * 只靠「停留 500 毫秒」那一格的话，翻到一半就退出去，这次看到的地方就白看了。
+ */
+private class EyePos {
+    var on = false
+    var ch = 0
+    /** 这一章里的第几个字。 */
+    var rel = 0
+    var progress = 0f
+    var no = 0
+    var len = 1
+}
+
 private class Atlas(
     val text: String,
     val chStart: IntArray,
@@ -584,7 +599,7 @@ private const val GAP = '\u200B'
 /** 开着「标出谁在说话」、可这一句没认出人来时，挂的那个签。 */
 private const val UNKNOWN = "未识别出"
 
-/** 「读的时候标出谁在说话」那一遍最多算这么多字。理由同上。 */
+/** 「读的时候标出谁在说话」那一遍最多算这么多字。一章五十万字时整章扫完要几十秒，眼前这几页早翻过去了。 */
 private const val MARK_CAP = 150_000
 
 /** 一上来先切几页。够铺满第一屏还多两页，点开不用等。 */
@@ -912,6 +927,10 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
     // 章内字偏移不能直接当页号用，一个字符号能有几千，夹过去会落到末页。
     // 一进书就翻到章尾，看着像「往后跳了一页」，其实是这一格错了。
     var restoreAt by remember(book.id) { mutableIntStateOf(book.charOffset) }
+    /* 打开时的位置。存一份不动，restoreAt 会被翻页消费掉。 */
+    val startOffset = remember(book.id) { book.charOffset }
+    /* 眼睛停在哪儿。见 [EyePos]。 */
+    val eye = remember(book.id) { EyePos() }
     var wantPage by remember(book.id) { mutableIntStateOf(0) }
     var page by remember { mutableIntStateOf(0) }
     var pageCount by remember { mutableIntStateOf(1) }
@@ -924,6 +943,15 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
             ch = book.chapterIndex.coerceIn(0, chapters.size - 1)
             restoreAt = book.charOffset
             wantPage = 0
+        }
+    }
+
+    /* 退出这一页时按眼睛停的地方落一次盘。翻到一半就退出去，这一回看到的地方不该白看。 */
+    DisposableEffect(book.id) {
+        onDispose {
+            if (eye.on) {
+                runCatching { app.shelf.touch(book.id, eye.ch, eye.rel, eye.progress, eye.no) }
+            }
         }
     }
 
@@ -1063,19 +1091,18 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         val base0 = a.chStart[c]
         val off = rel.coerceIn(0, (a.chEnd.getOrElse(c) { base0 } - base0).coerceAtLeast(0))
         val abs = (base0 + off).coerceIn(0, a.text.length)
-        app.shelf.touch(book.id, c, off, abs.toFloat() / a.text.length.coerceAtLeast(1))
+        app.shelf.touch(
+            book.id, c, off, abs.toFloat() / a.text.length.coerceAtLeast(1),
+            chapterNoOf(chapters.getOrNull(c)?.title.orEmpty(), c),
+        )
     }
 
-    /* 听书时的进度：手动节流 3 秒一次，换章立即写。 */
+    /* 听书时的进度：手动节流 3 秒一次，换章立即写。
+     * 只在真的在念的时候写。上一版暂停后也把播放器记着的那一章写回去 ——
+     * 用户听过第 3 章、又翻到第 2 章读，退出去书架上就变成了第 3 章。 */
     LaunchedEffect(playing, atlas) {
         val a = atlas ?: return@LaunchedEffect
-        if (!playing) {
-            val st = BookPlayer.flow.value
-            if (st.total > 0 && st.srcStart >= 0 && BookPlayer.owns(bookNow.title)) {
-                withContext(Dispatchers.IO) { saveAt(a, st.chapter, st.srcStart) }
-            }
-            return@LaunchedEffect
-        }
+        if (!playing) return@LaunchedEffect
         var last = 0L
         var lastCh = -1
         snapshotFlow { ps.chapter to ps.srcStart }.collect { (c, ss) ->
@@ -1090,16 +1117,9 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         }
     }
 
-    // 离开这一页时再保一次 —— 最后一句往往没赶上那个 3 秒窗口。
-    DisposableEffect(book.id) {
-        onDispose {
-            val a = atlas
-            val st = BookPlayer.flow.value
-            if (a != null && st.total > 0 && st.srcStart >= 0 && BookPlayer.owns(bookNow.title)) {
-                runCatching { saveAt(a, st.chapter, st.srcStart) }
-            }
-        }
-    }
+    /* 离开这一页时不再从播放器取位置。播放器记着的是「上一次念到哪儿」，
+     * 跟用户眼前翻到哪儿不是一回事 —— 拿它覆盖，书架上的章号就会倒着跳。
+     * 阅读位置由翻页、滚动那两条路写（各自带 600 毫秒节流），已经落过了。 */
 
 
     // 备货是「只合成不播」那一趟。播着别的书的时候，这一趟不算数。
@@ -1155,39 +1175,37 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
 
     /* 滚动那一档当前看的是哪一章。算签的优先级按它来，先算眼前这一章。 */
     var seenCh by remember { mutableIntStateOf(0) }
-    /* 当前章 + 前后各一章。chapters 必须在 key 里：进书那一刻 full 先到、chapters 还空着，那一遍一章都算不了。 */
+    /* 眼前这一章最靠前，之后是滚动时看到的那一章，再往后才是上下邻居。
+     * chapters 必须在 key 里：进书那一刻 full 先到、chapters 还空着，那一遍一章都算不了。 */
     LaunchedEffect(ch, full, chapters, seenCh, markOn, castKey) {
         if (!markOn) return@LaunchedEffect
         val t = full ?: return@LaunchedEffect
+        if (chapters.isEmpty()) return@LaunchedEffect
         val cb = cbMark
-        val order = intArrayOf(seenCh, ch, ch + 1, ch - 1, ch + 2)
+        val order = intArrayOf(ch, seenCh, ch + 1, ch - 1, ch + 2).filter { it in chapters.indices }
+
+        /* 盘上有账的先捞回来。大书重进时，这几章的规则不用再跑一遍。 */
+        withContext(Dispatchers.IO) {
+            com.pagefold.reader.book.Marks.preload(
+                book.id, castKey,
+                order.filter { com.pagefold.reader.book.Marks.get(com.pagefold.reader.book.Marks.key(book.id, castKey, it)) == null },
+            )
+        }
+
+        /* 角色表和规则只摊一份。上一版每章摊一次，五个章就是五遍。 */
+        val prof = profileOf(app, bookNow, effNow)
+        val first = ch.coerceIn(0, chapters.size - 1)
+        /* 攒着的是「章号、键、这一章的签」。 */
+        val later = ArrayList<Triple<Int, String, java.util.TreeMap<Int, String>>>(4)
+
         for (k in order) {
-            if (k !in chapters.indices) continue
             val mk = com.pagefold.reader.book.Marks.key(book.id, castKey, k)
             if (com.pagefold.reader.book.Marks.get(mk) != null) continue
             if (!com.pagefold.reader.book.Marks.claim(mk)) continue
-            val c = chapters[k]
             val body = try {
                 withContext(Dispatchers.Default) {
-                    runCatching {
-                        val s0 = c.start.coerceIn(0, t.length)
-                        val s1 = minOf(c.end.coerceIn(0, t.length), s0 + MARK_CAP)
-                        val out = java.util.TreeMap<Int, String>()
-                        if (s1 > s0) {
-                            val cut = t.substring(s0, s1)
-                            val pins = cb.pins.filter { it.ch == k }.associate { it.at to it.who }
-                            com.pagefold.reader.book.Cast.plan(cut, profileOf(app, bookNow, effNow), 0, pins)
-                                .filter { it.isDialog }
-                                .forEach { ln ->
-                                    if (ln.srcStart !in cut.indices) return@forEach
-                                    /* 键是全书偏移，跟 Laid 取签用的是同一把尺子。 */
-                                    val who = cb.pinAt(k, ln.srcStart)?.who ?: ln.speaker
-                                    /* 认不出来也挂一个，点它就能指给谁。 */
-                                    out[s0 + ln.srcStart] = if (who.isBlank()) UNKNOWN else who
-                                }
-                        }
-                        out
-                    }.getOrDefault(java.util.TreeMap())
+                    runCatching { cutMarks(t, chapters[k], cb, prof, k) }
+                        .getOrDefault(java.util.TreeMap())
                 }
             } finally {
                 /* 被取消也得摘记号，否则这一章在这个进程里再也不会算。 */
@@ -1195,7 +1213,26 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
             }
             /* 取消时不落账：落一个空表等于给这一章盖上「没人说话」的章。 */
             currentCoroutineContext().ensureActive()
-            com.pagefold.reader.book.Marks.put(mk, body)
+
+            if (k == first) {
+                /* 眼前这一章先亮出来，别等五章都算完。 */
+                com.pagefold.reader.book.Marks.put(mk, body)
+                withContext(Dispatchers.IO) {
+                    com.pagefold.reader.book.Marks.toDisk(book.id, castKey, k, body)
+                }
+            } else {
+                later += Triple(k, mk, body)
+            }
+        }
+
+        /* 前后那几章攒一起再落账：正文只重排一次。 */
+        if (later.isNotEmpty()) {
+            com.pagefold.reader.book.Marks.putAll(later.associate { it.second to it.third })
+            withContext(Dispatchers.IO) {
+                later.forEach { (k, _, body) ->
+                    com.pagefold.reader.book.Marks.toDisk(book.id, castKey, k, body)
+                }
+            }
         }
     }
 
@@ -1241,7 +1278,8 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                 val abs = (base + off).coerceIn(0, t.length.coerceAtLeast(0))
                 app.shelf.touch(
                     book.id, c, off,
-                    if (t.isEmpty()) 0f else abs.toFloat() / t.length
+                    if (t.isEmpty()) 0f else abs.toFloat() / t.length,
+                    chapterNoOf(chapters.getOrNull(c)?.title.orEmpty(), c),
                 )
             },
         )
@@ -1338,6 +1376,15 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         settled = true
         delay(160)
         armed = true
+        /*
+         * 一进书就把当前位置写回去一次。
+         * 只靠翻页、滚动那两条路写的话，从目录跳章、或者只看一眼就退出，架上的章号和进度
+         * 还是上一次的（看上去就是「书里第30章，架上写着第31章 · 0%」）。
+         * 写的还是原位置，只是把章号按标题重新认一遍、百分比按全书重新算一遍。
+         * 用的是存档里的章号，不是 ch —— 这一格比设 ch 的那一格先跑也不至于写成第 1 章。
+         */
+        val c0 = book.chapterIndex.coerceIn(0, (chapters.size - 1).coerceAtLeast(0))
+        runCatching { saveAt(a, c0, startOffset.coerceAtLeast(0)) }
     }
 
     /* 换翻法：左右翻 ↔ 上下滚。 */
@@ -1472,6 +1519,28 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         val last = (pagesNow.size - 1).coerceAtLeast(0)
                         val pi = page.coerceIn(0, last)
 
+                        /*
+                         * 眼睛停在第几页，就记哪儿。
+                         * 翻页是这里写、听书是上面那一格写、上下滚是后面那一格写。
+                         * 停留 500 毫秒才落盘 —— 一路翻过去时不必每页都写一次文件。
+                         */
+                        LaunchedEffect(ch, pi, pagesNow.size, armed) {
+                            if (!armed) return@LaunchedEffect
+                            if (restoreAt >= 0) return@LaunchedEffect
+                            val pg = cache.pages(ch).getOrNull(pi) ?: return@LaunchedEffect
+                            val abs0 = cache.laid(ch).abs(pg.start)
+                            val base = a.chStart.getOrElse(ch) { 0 }
+                            /* 记一份给「退出这一页」用：那一格读不到 Compose 的当前值。 */
+                            eye.on = true
+                            eye.ch = ch
+                            eye.rel = abs0
+                            eye.len = a.text.length.coerceAtLeast(1)
+                            eye.progress = ((base + abs0).coerceIn(0, a.text.length)).toFloat() / eye.len
+                            eye.no = chapterNoOf(chapters.getOrNull(ch)?.title.orEmpty(), ch)
+                            delay(500)
+                            withContext(Dispatchers.IO) { saveAt(a, ch, abs0) }
+                        }
+
                         LaunchedEffect(pagesNow.size) { pageCount = pagesNow.size.coerceAtLeast(1) }
 
                         /* 快翻到底了就把后面几页切出来。 */
@@ -1505,12 +1574,18 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         LaunchedEffect(armed, ch) {
                             if (!armed) return@LaunchedEffect
                             snapshotFlow { page }.collectLatest { p0 ->
-                                // 还没落稳就写回去，会把「章尾」记成书签，下回照抄。
+                                // 还没落稳就记，会把「章尾」当成读到的位置。
                                 if (restoreAt >= 0) return@collectLatest
-                                delay(600)
                                 val pg = pagesNow.getOrNull(p0) ?: return@collectLatest
-                                val abs = laidNow.abs(pg.start)
-                                withContext(Dispatchers.IO) { saveAt(a, ch, abs - a.chStart[ch]) }
+                                val abs0 = laidNow.abs(pg.start)
+                                eye.on = true
+                                eye.ch = ch
+                                eye.rel = abs0
+                                eye.len = a.text.length.coerceAtLeast(1)
+                                eye.progress =
+                                    ((a.chStart.getOrElse(ch) { 0 } + abs0).coerceIn(0, a.text.length))
+                                        .toFloat() / eye.len
+                                eye.no = chapterNoOf(chapters.getOrNull(ch)?.title.orEmpty(), ch)
                             }
                         }
                         // 念到哪一句，就翻到那一页。
@@ -3566,4 +3641,63 @@ private fun FlowChips(items: List<Pair<Int, String>>, picked: Int, onPick: (Int)
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+/**
+ * 切一章的签：哪几个位置是对白、各归谁。
+ * 键是全书偏移，跟 [Laid] 取签、跟名字签点开时查的是同一把尺子。
+ */
+private fun cutMarks(
+    t: String,
+    c: Chapter,
+    cb: com.pagefold.reader.book.CastBook,
+    prof: CastProfile,
+    ch: Int,
+): java.util.TreeMap<Int, String> {
+    val out = java.util.TreeMap<Int, String>()
+    val s0 = c.start.coerceIn(0, t.length)
+    val s1 = minOf(c.end.coerceIn(0, t.length), s0 + MARK_CAP)
+    if (s1 <= s0) return out
+    val cut = t.substring(s0, s1)
+    val pins = cb.pins.filter { it.ch == ch }.associate { it.at to it.who }
+    Cast.plan(cut, prof, 0, pins)
+        .filter { it.isDialog }
+        .forEach { ln ->
+            if (ln.srcStart !in cut.indices) return@forEach
+            val who = cb.pinAt(ch, ln.srcStart)?.who ?: ln.speaker
+            /* 认不出来也挂一个，点它就能指给谁。 */
+            out[s0 + ln.srcStart] = if (who.isBlank()) UNKNOWN else who
+        }
+    return out
+}
+
+/**
+ * 这一章在书里叫「第几章」。
+ * 目录开头常有一条「序」或「卷首」，它没有章号 —— 位置 + 1 会凭空多出一章，
+ * 书里写「第30章」、架上却写成「第31章」。所以以标题里那个数为准。
+ */
+private fun chapterNoOf(title: String, index: Int): Int {
+    val m = Regex("""第\s*([0-9〇零一二三四五六七八九十百千两]{1,9})\s*[章回节]""").find(title)
+        ?: return index + 1
+    val raw = m.groupValues[1]
+    val n = raw.toIntOrNull() ?: cnNumber(raw)
+    return if (n != null && n > 0) n else index + 1
+}
+
+/** 中文数字转整数。「一百二十三」→ 123。认不出来返回 null。 */
+private fun cnNumber(s: String): Int? {
+    var total = 0
+    var cur = 0
+    for (ch in s) {
+        when (ch) {
+            '零', '〇' -> {}
+            in '一'..'九' -> cur = ch - '一' + 1
+            '两' -> cur = 2
+            '十' -> { total += (if (cur == 0) 1 else cur) * 10; cur = 0 }
+            '百' -> { total += (if (cur == 0) 1 else cur) * 100; cur = 0 }
+            '千' -> { total += (if (cur == 0) 1 else cur) * 1000; cur = 0 }
+            else -> return null
+        }
+    }
+    return total + cur
 }

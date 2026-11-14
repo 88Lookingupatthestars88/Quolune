@@ -121,6 +121,8 @@ fun StoreScreen(
     val playing = Audition.playingId
     var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    /** 正在删的进度：已删 / 总数。两格都是 0 = 没在删。 */
+    var doing by remember { mutableStateOf(0 to 0) }
 
     BackHandler { onBack() }
 
@@ -137,6 +139,27 @@ fun StoreScreen(
         if (playing != null && ids.contains(playing)) Audition.stop()
         val jobs = ids.mapNotNull { id -> rows.firstOrNull { it.id == id } }
         picked = picked - ids
+        /* 先从列表上拿掉再去删盘。等盘删完才刷新的话，一千条就是盯着同一屏等几十秒。 */
+        rows = rows.filterNot { it.id in ids }
+
+        if (kind == StoreKind.AUDIO || kind == StoreKind.TRIAL) {
+            /* 念过的段落一次删完：账本只落一次，离开这一页也接着删。 */
+            doing = 0 to jobs.size
+            app.work.launch {
+                /* 进度直接写 state：snapshot 允许跨线程写，这几个数只用来画一行字。 */
+                val tick: (Int) -> Unit = { at -> doing = at to jobs.size }
+                val gone = runCatching { app.synth.dropAll(jobs.map { it.id }, tick) }.getOrDefault(0)
+                withContext(Dispatchers.Main) {
+                    doing = 0 to 0
+                    msg = if (gone >= jobs.size) "已删 ${jobs.size} 件"
+                    else "删了 $gone 件，${jobs.size - gone} 件没删掉"
+                    gen++
+                    onChanged()
+                }
+            }
+            return
+        }
+
         scope.launch {
             /* 一件一件来，每件单独兜，失败不影响其余。 */
             var bad = 0
@@ -145,7 +168,6 @@ fun StoreScreen(
                 jobs.forEach { p ->
                     val ok = runCatching {
                         when (kind) {
-                            StoreKind.AUDIO, StoreKind.TRIAL -> app.synth.drop(p.id)
                             StoreKind.BOOK -> app.shelf.remove(p.id)
                             StoreKind.VOICE -> app.box.remove(p.id)
                             StoreKind.COVER -> {
@@ -158,6 +180,8 @@ fun StoreScreen(
                                 Bg.drop(app, p.id)
                                 app.field.edit { it.withBg(p.id, "auto") }
                             }
+                            /* AUDIO / TRIAL 走上面那条批量路，到不了这儿。 */
+                            else -> Unit
                         }
                     }
                     if (ok.isFailure) {
@@ -226,7 +250,12 @@ fun StoreScreen(
                             .padding(horizontal = 10.dp, vertical = 8.dp)
                     )
                     Spacer(Modifier.weight(1f))
-                    if (picked.isNotEmpty()) {
+                    if (doing.second > 0) {
+                        Text(
+                            "正在删 ${doing.first} / ${doing.second}",
+                            fontSize = 12.sp, color = skin.inkDim,
+                        )
+                    } else if (picked.isNotEmpty()) {
                         Btn(
                             "删掉 ${picked.size} 件",
                             { wipe(picked) },
