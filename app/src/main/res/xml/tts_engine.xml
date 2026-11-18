@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  系统「文字转语音」里点 Quolune 右边那个齿轮，就是照这个文件去找设置页的。
+  少这一行，齿轮点了什么都不会发生 —— 这是 framework 的硬要求，不是可选项。
+
+  只认 settingsActivity / setupActivity 这两个公开属性；
+  locale、sampleRateInHz 那些是系统内部属性，第三方 APK 写不了，写了 aapt 会直接报错。
+-->
+<tts-engine xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.pagefold.reader.Main"
+    android:setupActivity="com.pagefold.reader.Main" />

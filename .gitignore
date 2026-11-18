@@ -1,0 +1,17 @@
+# 构建产物
+/build
+/app/build
+/.gradle
+/.kotlin
+/captures
+*.apk
+*.aab
+
+# 签名：密钥本体和它的口令都不进仓库
+keystore.properties
+*.jks
+*.keystore
+/local.properties
+
+# 本地缓存与草稿
+/缓存

@@ -1,0 +1,968 @@
+package com.pagefold.reader.book
+
+import com.google.gson.Gson
+import com.google.gson.JsonParser
+import com.google.gson.reflect.TypeToken
+
+/** 一句待朗读的文本。srcStart / srcEnd 是这一句在本章正文里的字符区间（闭开区间）。 */
+data class Line(
+    val text: String,
+    val isDialog: Boolean,
+    val speaker: String,
+    val voice: String,
+    val srcStart: Int = -1,
+    val srcEnd: Int = -1,
+    /** 这一句该用的调门。空 = 按旁白/对白各自的默认来。 */
+    val style: String = "",
+)
+
+/**
+* 一条匹配规则：用什么正则认出一个人，认出来派给谁。
+*
+* @param character 这条规则派给谁。必须跟角色表里的名字一模一样。
+* @param pattern   正则。只在引号外面那半句里找，不碰正文。
+* @param afterDialog 看引号后面那半句（true）还是前面（false）
+* @param enabled   关掉的那条不参与
+*/
+data class CastRule(
+    val character: String = "",
+    val pattern: String = "",
+    val afterDialog: Boolean = false,
+    val enabled: Boolean = true,
+    /** 只有「说白 / 白口」这两行用它：那一行第二列写的是嗓子。别的角色嗓子在 CastRole 上。 */
+    val slotVoice: String = "",
+) {
+    private var compiled: Regex? = null
+    private var tried = false
+
+    fun regex(): Regex? {
+        if (tried) return compiled
+        tried = true
+        compiled = runCatching { Regex(pattern) }.getOrNull()
+        return compiled
+    }
+
+    fun bad(): Boolean = character.isBlank() || pattern.isBlank() || regex() == null
+}
+
+/**
+* 自动匹配时数出来的一个人。
+*
+* @param lines 这本书里他有多少句台词。用来排序，也用来决定「值不值得单独配一副嗓子」。
+* @param on    用户勾上没有。默认只勾台词多的那几个。
+*/
+data class CastName(
+    val name: String = "",
+    val lines: Int = 0,
+    val on: Boolean = false,
+    /** 代词这一格：m / f / 空。只在导入旧表时读进来。 */
+    val sex: String = "",
+    /** 别的叫法。书里一处写「邮差小陈」、一处只写「小陈」，两种都得认。 */
+    val alt: List<String> = emptyList(),
+    /** 他说过的一句话，四十字以内。 */
+    val sample: String = "",
+)
+
+/** 一个角色：名字 + 嗓子 + 调门。嗓子空 = 用白口那副。 */
+data class CastRole(
+    val name: String,
+    val voice: String = "",
+    val style: String = "",
+    /** 别的叫法。认人的时候一起编进正则，配嗓子仍然只认 [name]。 */
+    val alt: List<String> = emptyList(),
+    /** 类别名。「秦·谋士」这种 —— 从老的配置里带进来的，只用来标注，不参与认人。 */
+    val tag: String = "",
+) {
+    /** 全部叫法，第一个是显示名。空的和重的剔掉。 */
+    fun ways(): List<String> =
+        (listOf(name) + alt).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+}
+
+/** 拿去认人的一条。plan 只认识这个，不关心它是怎么存下来的。 */
+data class Rule(
+    val scope: Scope,
+    val role: String,
+    val voice: String,
+    val pattern: String,
+) {
+    enum class Scope { BEFORE, AFTER, ANY }
+
+    private var compiled: Regex? = null
+
+    fun regex(): Regex? {
+        compiled?.let { return it }
+        return runCatching { Regex(pattern) }.also { compiled = it.getOrNull() }.getOrNull()
+    }
+
+    fun bad(): Boolean = regex() == null
+}
+
+/** 数人算法的版本。改了判据就把这个数加一，老书进书架时会重数。 */
+const val NAME_VER = 11
+
+data class CastBook(
+    val v: Int = 4,
+    val name: String = "",
+    val narrator: String = "",
+    val dialog: String = "",
+    val narratorStyle: String = "",
+    val dialogStyle: String = "",
+    val roles: List<CastRole> = emptyList(),
+    val rules: List<CastRule> = emptyList(),
+    /** 自动匹配数出来的名单。导入时跑一次，之后照着它勾。 */
+    val pool: List<CastName> = emptyList(),
+    /** 这份名单是第几版算法数的。小于 [NAME_VER] 的，进书时重数一遍。 */
+    val poolAt: Int = 0,
+    /** 勾了的题材包。只影响怎么认人，不影响谁用哪副嗓子。 */
+    val packs: List<String> = emptyList(),
+    /** 从书里抽出来的说法，比题材准。 */
+    val extraVerb: List<String> = emptyList(),
+    val extraAdv: List<String> = emptyList(),
+    val extraTitle: List<String> = emptyList(),
+    /** 名字 → m/f。代词那一层要用。 */
+    val sex: Map<String, String> = emptyMap(),
+    /** 用户点掉的词。题材包里点了不要的，收在这一串里，合成词表时减掉。 */
+    val off: List<String> = emptyList(),
+    /** 单句改派。规则认出来的人被它盖掉，只认这一个位置。 */
+    val pins: List<Pin> = emptyList(),
+    /** 读的时候在每段对白前面标出是谁在说话。这本书自己的开关，跟念法同一层。 */
+    val mark: Boolean = false,
+    /** 这本书自己的「怎么分」。空 = 跟全局那一段（[Settings.aiPrompt]），再空就跟出厂那份。 */
+    val prompt: String = "",
+) {
+
+    /** 这一处在哪一句已经改派过。没有就是 null。 */
+    fun pinAt(ch: Int, at: Int): Pin? = pins.firstOrNull { it.ch == ch && it.at == at }
+    /** 全部叫法：角色自身的名字与别名。 */
+    fun ways(): List<String> = roles.flatMap { it.ways() }.distinct()
+
+    fun voiceOf(role: String): String =
+        roles.firstOrNull { it.name == role }?.voice.orEmpty()
+
+    fun styleOf(role: String): String =
+        roles.firstOrNull { it.name == role }?.style.orEmpty()
+
+    /** 交给 plan 的那串规则。关掉的、写坏的全部剔掉。 */
+    fun active(): List<Rule> = rules
+        .filter { it.enabled && !it.bad() }
+        .map {
+            Rule(
+                scope = if (it.afterDialog) Rule.Scope.AFTER else Rule.Scope.ANY,
+                role = it.character,
+                voice = voiceOf(it.character),
+                pattern = it.pattern,
+            )
+        }
+
+    fun with(role: CastRole): CastBook {
+        val list = roles.toMutableList()
+        val i = list.indexOfFirst { it.name == role.name }
+        if (i >= 0) list[i] = role else list.add(role)
+        return copy(roles = list)
+    }
+
+    fun without(role: String): CastBook = copy(
+        roles = roles.filter { it.name != role },
+        rules = rules.filter { it.character != role },
+        pins = pins.filter { it.who != role },
+    )
+}
+
+/** 角色表的读写。写出去形如 {"narration":{"voice":…,"style":""},"dialogue":{…}}。 */
+object RuleCodec {
+
+    private val gson = Gson()
+
+    private fun arr(list: List<String>): com.google.gson.JsonArray =
+        com.google.gson.JsonArray().apply { list.forEach { add(it) } }
+
+    private fun str(o: com.google.gson.JsonObject?, k: String): String =
+        runCatching { o?.get(k)?.takeIf { !it.isJsonNull }?.asString }.getOrNull().orEmpty()
+
+    private fun styleOf(o: com.google.gson.JsonObject?): Pair<String, String> =
+        str(o, "voice") to str(o, "style")
+
+    /** 别的叫法。缺了就空表，老存档里没有这个键。 */
+    private fun alts(o: com.google.gson.JsonObject?): List<String> = runCatching {
+        o?.getAsJsonArray("alt")?.mapNotNull { e -> runCatching { e.asString }.getOrNull() }
+            ?.filter { it.isNotBlank() }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    /** 单句改派那张表。老存档没有这个键，给空表。 */
+    private fun pinsOf(root: com.google.gson.JsonObject): List<Pin> = runCatching {
+        root.getAsJsonArray("pins")?.mapNotNull { el ->
+            val o = runCatching { el.asJsonObject }.getOrNull() ?: return@mapNotNull null
+            val who = str(o, "who")
+            val ch = runCatching { o.get("ch")?.asInt }.getOrNull() ?: -1
+            val at = runCatching { o.get("at")?.asInt }.getOrNull() ?: -1
+            if (who.isBlank() || ch < 0 || at < 0) null
+            else Pin(ch, at, who, str(o, "text"))
+        }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    fun toJson(cast: CastBook): String {
+        val root = com.google.gson.JsonObject()
+        root.addProperty("v", 4)
+        fun slot(voice: String, style: String) = com.google.gson.JsonObject().apply {
+            addProperty("voice", voice)
+            addProperty("style", style)
+        }
+        root.add("narration", slot(cast.narrator, cast.narratorStyle))
+        root.add("dialogue", slot(cast.dialog, cast.dialogStyle))
+        val chars = com.google.gson.JsonObject()
+        cast.roles.forEach { r ->
+            val o = slot(r.voice, r.style)
+            if (r.alt.isNotEmpty()) o.add("alt", arr(r.alt))
+            if (r.tag.isNotBlank()) o.addProperty("tag", r.tag)
+            chars.add(r.name, o)
+        }
+        root.add("characters", chars)
+        val rules = com.google.gson.JsonArray()
+        cast.rules.forEach { r ->
+            rules.add(com.google.gson.JsonObject().apply {
+                addProperty("character", r.character)
+                addProperty("pattern", r.pattern)
+                addProperty("afterDialog", r.afterDialog)
+                addProperty("enabled", r.enabled)
+            })
+        }
+        root.add("matchRules", rules)
+        root.addProperty("poolAt", cast.poolAt)
+        if (cast.pool.isNotEmpty()) {
+            val pool = com.google.gson.JsonArray()
+            cast.pool.forEach { n ->
+                pool.add(com.google.gson.JsonObject().apply {
+                    addProperty("name", n.name)
+                    addProperty("lines", n.lines)
+                    addProperty("on", n.on)
+                    if (n.sex.isNotBlank()) addProperty("sex", n.sex)
+                    if (n.sample.isNotBlank()) addProperty("sample", n.sample)
+                    if (n.alt.isNotEmpty()) add("alt", arr(n.alt))
+                })
+            }
+            root.add("pool", pool)
+        }
+        if (cast.packs.isNotEmpty()) {
+            root.add("packs", com.google.gson.JsonArray().apply { cast.packs.forEach { add(it) } })
+        }
+        if (cast.extraVerb.isNotEmpty()) {
+            root.add("extraVerb", com.google.gson.JsonArray().apply { cast.extraVerb.forEach { add(it) } })
+        }
+        if (cast.extraAdv.isNotEmpty()) {
+            root.add("extraAdv", com.google.gson.JsonArray().apply { cast.extraAdv.forEach { add(it) } })
+        }
+        if (cast.extraTitle.isNotEmpty()) {
+            root.add("extraTitle", com.google.gson.JsonArray().apply { cast.extraTitle.forEach { add(it) } })
+        }
+        if (cast.sex.isNotEmpty()) {
+            val sex = com.google.gson.JsonObject()
+            cast.sex.forEach { (k, v) -> sex.addProperty(k, v) }
+            root.add("sex", sex)
+        }
+        if (cast.off.isNotEmpty()) root.add("off", arr(cast.off))
+        if (cast.mark) root.addProperty("mark", true)
+        if (cast.prompt.isNotBlank()) root.addProperty("prompt", cast.prompt)
+        if (cast.pins.isNotEmpty()) {
+            val ps = com.google.gson.JsonArray()
+            cast.pins.forEach { p ->
+                ps.add(com.google.gson.JsonObject().apply {
+                    addProperty("ch", p.ch)
+                    addProperty("at", p.at)
+                    addProperty("who", p.who)
+                    if (p.text.isNotBlank()) addProperty("text", p.text)
+                })
+            }
+            root.add("pins", ps)
+        }
+        return gson.toJson(root)
+    }
+
+    fun fromJson(raw: String): CastBook {
+        val root = runCatching { JsonParser.parseString(raw).asJsonObject }.getOrNull()
+            ?: return CastBook()
+        // 新格式：narration / dialogue / characters / matchRules 四个键里有一个就算
+        val hasNew = root.has("characters") || root.has("matchRules") ||
+            root.has("narration") || root.has("dialogue")
+        if (hasNew) {
+            val (nv, ns) = styleOf(root.getAsJsonObject("narration"))
+            val (dv, ds) = styleOf(root.getAsJsonObject("dialogue"))
+            val roles = ArrayList<CastRole>()
+            runCatching {
+                root.getAsJsonObject("characters")?.entrySet()?.forEach { e ->
+                    val o = e.value.takeIf { it.isJsonObject }?.asJsonObject
+                    val (v, s) = styleOf(o)
+                    roles += CastRole(e.key, v, s, alts(o), str(o, "tag"))
+                }
+            }
+            val rules = ArrayList<CastRule>()
+            runCatching {
+                root.getAsJsonArray("matchRules")?.forEach { el ->
+                    val o = el.asJsonObject
+                    val who = str(o, "character")
+                    val pat = str(o, "pattern")
+                    if (who.isNotBlank() && pat.isNotBlank()) {
+                        rules += CastRule(
+                            character = who,
+                            pattern = pat,
+                            /* 两个键名都认：我们自己写的是 afterDialog，别处生成的配置写的是 afterDialogue。 */
+                            afterDialog = runCatching {
+                                o.get("afterDialog")?.asBoolean ?: o.get("afterDialogue")?.asBoolean
+                            }.getOrNull() ?: false,
+                            enabled = runCatching { o.get("enabled")?.asBoolean }.getOrNull() ?: true,
+                        )
+                    }
+                }
+            }
+            val pool = ArrayList<CastName>()
+            runCatching {
+                root.getAsJsonArray("pool")?.forEach { el ->
+                    val o = el.asJsonObject
+                    val n = str(o, "name")
+                    if (n.isNotBlank()) {
+                        pool += CastName(
+                            name = n,
+                            lines = runCatching { o.get("lines")?.asInt }.getOrNull() ?: 0,
+                            on = runCatching { o.get("on")?.asBoolean }.getOrNull() ?: false,
+                            sex = str(o, "sex"),
+                            alt = alts(o),
+                            sample = str(o, "sample"),
+                        )
+                    }
+                }
+            }
+            fun strList(k: String): List<String> = runCatching {
+                root.getAsJsonArray(k)?.mapNotNull { runCatching { it.asString }.getOrNull() }.orEmpty()
+            }.getOrDefault(emptyList())
+            val sex = LinkedHashMap<String, String>()
+            runCatching {
+                root.getAsJsonObject("sex")?.entrySet()?.forEach { e ->
+                    runCatching { e.value.asString }.getOrNull()?.let { sex[e.key] = it }
+                }
+            }
+            return CastBook(
+                narrator = nv, dialog = dv, narratorStyle = ns, dialogStyle = ds,
+                roles = roles, rules = rules,
+                pool = pool,
+                poolAt = runCatching { root.get("poolAt")?.asInt }.getOrNull() ?: 0,
+                packs = strList("packs"),
+                extraVerb = strList("extraVerb"),
+                extraAdv = strList("extraAdv"),
+                extraTitle = strList("extraTitle"),
+                sex = sex,
+                off = strList("off"),
+                pins = pinsOf(root),
+                mark = runCatching { root.get("mark")?.asBoolean }.getOrNull() ?: false,
+                prompt = str(root, "prompt"),
+            ).let { b0 ->
+                /* 类别名换真名。老配置里 characters 的键是「秦·帝王」，真人名在 pattern 里。 */
+                val b = b0.copy(
+                    roles = b0.roles.map { r ->
+                        val members = b0.rules.filter { it.character == r.name }
+                            .flatMap { membersIn(it.pattern) }
+                            .distinct()
+                        val real = members.firstOrNull()
+                        if (real != null && real != r.name) {
+                            r.copy(name = real, alt = members.drop(1), tag = r.name)
+                        } else r
+                    }.distinctBy { it.name },
+                )
+                // 规则里提到、角色表里没有的人，补一个空嗓子。
+                val missing = b.rules.map { it.character }.distinct().filter { n ->
+                    b.roles.none { it.name == n }
+                }
+                val withRoles = b.copy(roles = b.roles + missing.map { CastRole(it) })
+                /* 别处生成的配置只有 characters，没有 pool。 */
+                if (withRoles.pool.isEmpty() && withRoles.roles.isNotEmpty()) {
+                    // 同上：名单要写全，勾只给单人角色。
+                    val p = ArrayList<CastName>(withRoles.roles.size * 2)
+                    withRoles.roles.forEach { r ->
+                        r.ways().forEach { n -> p.add(CastName(n, 0, on = n == r.name && r.alt.isEmpty())) }
+                    }
+                    withRoles.copy(pool = p)
+                } else withRoles
+            }
+        }
+        // 我们自己 v2/v3 的老格式：roles 里带着 pattern/scope
+        val out = CastBook(
+            narrator = str(root, "narrator"),
+            dialog = str(root, "dialog"),
+            narratorStyle = str(root, "narratorStyle"),
+            dialogStyle = str(root, "dialogStyle"),
+        )
+        val roles = ArrayList<CastRole>()
+        val rules = ArrayList<CastRule>()
+        runCatching {
+            root.getAsJsonArray("roles")?.forEach { el ->
+                val o = el.asJsonObject
+                val n = str(o, "name")
+                if (n.isBlank()) return@forEach
+                roles += CastRole(n, str(o, "voice"), str(o, "style"))
+                val pat = str(o, "pattern")
+                if (pat.isNotBlank()) {
+                    rules += CastRule(
+                        character = n,
+                        pattern = pat,
+                        afterDialog = str(o, "scope").equals("after", true),
+                        enabled = runCatching { o.get("enabled")?.asBoolean }.getOrNull() ?: true,
+                    )
+                }
+            }
+        }
+        // 老格式里另一处：顶层的 rules 数组
+        runCatching {
+            root.getAsJsonArray("rules")?.forEach { el ->
+                val o = el.asJsonObject
+                val who = str(o, "role").ifBlank { str(o, "voice") }
+                val pat = str(o, "pattern")
+                if (who.isNotBlank() && pat.isNotBlank()) {
+                    rules += CastRule(who, pat, str(o, "scope").equals("after", true), true)
+                }
+            }
+        }
+        return out.copy(roles = roles, rules = rules)
+    }
+
+    /** 一行一条：谁 | 嗓子 | 正则 [| 前/后]第二、三列可以空。 */
+    fun fromText(raw: String): List<CastRule> {
+        val out = ArrayList<CastRule>()
+        raw.lines().forEach { line ->
+            val s = line.trim()
+            if (s.isEmpty() || s.startsWith("#") || s.startsWith("//")) return@forEach
+            val t = s.replace('｜', '|').replace('\t', '|')
+            val i1 = t.indexOf('|')
+            if (i1 <= 0) return@forEach
+            val i2 = t.indexOf('|', i1 + 1)
+            val who = t.substring(0, i1).trim()
+            val voice = if (i2 < 0) t.substring(i1 + 1).trim() else t.substring(i1 + 1, i2).trim()
+            var pat = if (i2 < 0) "" else t.substring(i2 + 1).trim()
+            var after = false
+            // 末尾单独挂一个「前 / 后」，其余全算正则
+            if (pat.endsWith("|前") || pat.endsWith("|后")) {
+                after = pat.endsWith("|后")
+                pat = pat.dropLast(2).trim()
+            }
+            if (who.isBlank()) return@forEach
+            out += CastRule(who, pat, after, true, slotVoice = voice)
+        }
+        return out
+    }
+
+
+    /** 括号里的分隔符：空白、顿号、逗号、斜杠都算。 */
+    private val SPLIT = Regex("[\\s\\u3000、,，/／｜|]+")
+
+    /** 「旁白」「对白」这两个词，导入时可省略冒号或空格。 */
+    private val SLOT_NARR = setOf("旁白", "说白", "narrator", "narration", "叙述")
+    private val SLOT_DIAL = setOf("对白", "白口", "dialog", "dialogue", "对话")
+
+    /** 一行一组：（人 人）嗓子。括号里是这一组的人，括号后面是这一组用的嗓子。 */
+    fun fromGroups(raw: String): CastBook {
+        var nar = ""
+        var dia = ""
+        val roles = ArrayList<CastRole>()
+        raw.lines().forEach { line ->
+            val s = line.trim()
+            if (s.isEmpty() || s.startsWith("#") || s.startsWith("//")) return@forEach
+
+            // 括号：全角半角方括号都认
+            val open = s.indexOfFirst { it == '（' || it == '(' || it == '【' || it == '[' }
+            if (open >= 0) {
+                val close = s.indexOfFirst { it == '）' || it == ')' || it == '】' || it == ']' }
+                if (close > open) {
+                    val inside = s.substring(open + 1, close)
+                    val voice = s.substring(close + 1).trim().trimStart('|', '：', ':', '-', ' ')
+                    val ways = inside.split(SPLIT).map { it.trim() }.filter { it.isNotBlank() }
+                    if (ways.isNotEmpty()) {
+                        val name = ways.first()
+                        roles.removeAll { it.name == name }
+                        /* 第一个是组名，alt 只装「组名以外的人」。 */
+                        roles.add(CastRole(name, voice, alt = ways.drop(1).filter { it != name }))
+                    }
+                    return@forEach
+                }
+            }
+
+            // 不带括号：第一个词是名字，其余是嗓子。中间用什么隔都行。
+            val parts = s.split(SPLIT).map { it.trim() }.filter { it.isNotBlank() }
+            if (parts.isEmpty()) return@forEach
+            val head = parts[0]
+            val rest = parts.drop(1).joinToString(" ")
+            when (head) {
+                in SLOT_NARR -> { nar = rest; return@forEach }
+                in SLOT_DIAL -> { dia = rest; return@forEach }
+            }
+            roles.removeAll { it.name == head }
+            roles.add(CastRole(head, rest))
+        }
+        // 名单：正名一行（勾上），别名不必各占一行 —— 别名在角色里，认人的时候一起编进去。
+        /* 名单里要写全所有名字 —— 组名、组员都写。 */
+        val pool = ArrayList<CastName>(roles.size * 2)
+        roles.forEach { r ->
+            val all = r.ways()
+            all.forEach { n -> pool.add(CastName(n, 0, on = n == r.name && r.alt.isEmpty())) }
+        }
+        return CastBook(narrator = nar, dialog = dia, roles = roles, pool = pool)
+    }
+
+    /** 导出一行一组。只写名字和嗓子，不写正则 —— 正则是一次性的兜底，换个应用、换本书都没用，混在文件里只会让人以为那是必须的。 */
+    fun toGroups(cast: CastBook, title: String = ""): String = buildString {
+        appendLine("# 派角" + if (title.isNotBlank()) " · $title" else "")
+        appendLine("# 一行一组：括号里是这一组的人，括号后面是这一组用的嗓子。")
+        appendLine("# 组里可以只有一个人。这些行可以随便改，再导回来就行。")
+        appendLine()
+        appendLine("旁白 " + cast.narrator)
+        appendLine("对白 " + cast.dialog)
+        appendLine()
+        cast.roles.forEach { r ->
+            if (r.ways().isEmpty()) return@forEach
+            append("（").append(r.ways().joinToString(" ")).append("）").append(r.voice).appendLine()
+        }
+    }
+
+    /** 长得像一组、其实不是人的那些。 */
+    private val NOISE = setOf(
+        "传来", "响起", "传出", "声音", "话音", "说道", "开口", "喃喃", "低声", "沉声",
+        "说道", "自语", "嘀咕", "冷声", "轻声", "大声", "齐声", "喝道",
+    )
+
+    private val GROUP_IN_PATTERN =
+        Regex("\\(\\?:([\\u4e00-\\u9fa5]{2,4}(?:\\|[\\u4e00-\\u9fa5]{2,4})*)\\)")
+
+    fun membersIn(pattern: String): List<String> {
+        for (m in GROUP_IN_PATTERN.findAll(pattern)) {
+            /* (?!(?:A|B|C)) 里也全是人名，但那是「除了这些人以外」的意思，不能当成员。 */
+            val st = m.range.first
+            if (st >= 2 && pattern[st - 1] in "!=<" && pattern[st - 2] == '?') continue
+            val list = m.groupValues[1].split('|').map { it.trim() }
+                // 「（传来|响起|传出声音）」这种也是 `(?:A|B)`，但它说的是声音，不是人。
+                .filter { it.isNotBlank() && it !in NOISE }
+            if (list.isNotEmpty()) return list
+        }
+        return emptyList()
+    }
+
+    fun encode(rules: List<CastRule>): String = buildString {
+        appendLine("# 一行一条：谁 | 嗓音 | 正则 [| 后]")
+        appendLine("# 竖线只切前两刀，正则里的竖线不会被切坏。以 # 开头的行不算。")
+        rules.forEach {
+            append(it.character).append('|').append(it.slotVoice).append('|').append(it.pattern)
+            if (it.afterDialog) append("|后")
+            appendLine()
+        }
+    }
+
+    /** 把一串规则收成一张表：说到「说白 / 白口」的那两行，改的是旁白和对白。 */
+    fun toBook(rules: List<CastRule>, narrator: String, dialog: String): CastBook {
+        var nar = narrator
+        var dia = dialog
+        val roles = LinkedHashMap<String, CastRole>()
+        val keep = ArrayList<CastRule>()
+        rules.forEach { r ->
+            when (r.character) {
+                "说白", "旁白", "narrator" -> { nar = r.slotVoice.ifBlank { nar }; return@forEach }
+                "白口", "对白", "dialog" -> { dia = r.slotVoice.ifBlank { dia }; return@forEach }
+            }
+            val v = r.slotVoice
+            // 名字那一格可以写好几个叫法：「邮差小陈 / 小陈」。第一个是正名，其余是别名。
+            val ways = r.character.split('/', '／', '、').map { it.trim() }.filter { it.isNotBlank() }
+            val name = ways.firstOrNull() ?: r.character
+            val alt = ways.drop(1)
+            if (!roles.containsKey(name)) roles[name] = CastRole(name, v, alt = alt)
+            keep += if (name == r.character) r else r.copy(character = name)
+        }
+        return CastBook(narrator = nar, dialog = dia, roles = roles.values.toList(), rules = keep)
+    }
+}
+
+/** 一份完整的角色方案，交给 plan 用。 */
+data class CastProfile(
+    val narratorVoice: String,
+    val defaultVoice: String,
+    val narratorStyle: String = "",
+    val dialogStyle: String = "",
+    val rules: List<Rule>,
+    /** 角色名 → 嗓子。查不到就用 defaultVoice，绝不拿名字当嗓子用。 */
+    val voices: Map<String, String> = emptyMap(),
+    /** 角色名 → 调门。空串和查不到都按对白那档走。 */
+    val styles: Map<String, String> = emptyMap(),
+    /** 这本书认得的全部叫法，预先编好的。空 = 只走手写规则。 */
+    val ban: Ban? = null,
+)
+
+/** 分角色引擎。处理顺序：段落 → 切成「旁白 / 对白」交替片段 → 每句对白找说话人 → 找不到就交替推断 → 再不行用默认音色比「只看引。 */
+object Cast {
+
+    private val QUOTE_PAIRS = listOf(
+        '“' to '”', '「' to '」', '『' to '』', '"' to '"', '\'' to '\''
+    )
+
+    /**
+     * 把一章正文切成带说话人、带字符区间的行序列。
+     *
+     * @param chunk 单行上限。超过就找最近的句末切一刀。
+     */
+    fun plan(text: String, p: CastProfile, chunk: Int = 800, pins: Map<Int, String> = emptyMap()): List<Line> {
+        val out = ArrayList<Line>(256)
+        var lastSpeaker: String? = null
+        /* 上一段旁白里的主语。中文主语在前，紧跟的纯对白段就是他说的。 */
+        var lastActor: String? = null
+        /* 旁白里最后点过的男女各是谁。段首是「她」「他」时靠这两格接回去。 */
+        var lastF: String? = null
+        var lastM: String? = null
+        /* 上一次点名字之后隔了几段。 */
+        var actorAge = 99
+        /* 上一段是不是「只有对白、一个字旁白都没有」。 */
+        var lastParaAllDialog = false
+        /* 最近露面的两个人。 */
+        var turnA: String? = null
+        var turnB: String? = null
+        /* 最近点过名的几个人（新的在后）。 */
+        val recent = ArrayList<String>(4)
+        fun touchName(w: String?) {
+            if (w.isNullOrBlank()) return
+            recent.remove(w)
+            recent.add(w)
+            while (recent.size > 4) recent.removeAt(0)
+        }
+        /* 最近露过面、又不是 [not] 的那个人。 */
+        fun otherThan(not: String?): String? {
+            for (i in recent.indices.reversed()) {
+                val w = recent[i]
+                if (w != not) return w
+            }
+            return null
+        }
+        /* 同一段里前一个引号归谁。一段话被拆成几个引号时，后面那几个跟着它。 */
+        var paraPrev: String? = null
+
+        var pStart = 0
+        while (pStart <= text.length) {
+            val base = pStart
+            var pEnd = text.indexOf('\n', base)
+            if (pEnd < 0) pEnd = text.length
+            val para = text.substring(base, pEnd)
+            pStart = pEnd + 1
+
+            if (para.isBlank()) { if (pEnd >= text.length) break else continue }
+            paraPrev = null
+            if (actorAge < 99) actorAge++
+            /* 章节标题那一行不是正文。 */
+            val isHead = ChapterHead.isLine(para.trim())
+
+            val segs = splitQuotes(para)
+            val hasDialog = segs.any { it.isDialog }
+
+            /* 这一段在说谁。只看旁白，不看引号里 —— 「这个张仁的军神不是白叫的」是有人提到张仁，不是张仁在说话。 */
+            if (!isHead) p.ban?.let { b ->
+                /* 这一段的旁白文本：有对白取引号外那一截，没有就整段。上限放宽，主语常压在状语、动作后面。 */
+                val said = if (!hasDialog) para.take(140)
+                else segs.filter { !it.isDialog }
+                    .joinToString("") { para.substring(it.from, it.to) }.take(160)
+                val all = b.bare(said)
+                val first = all.firstOrNull()
+                /* 这一段写谁，下一句就是谁说的。段首六字内最可信，段中记一档距离；
+段首是介词的整段不认。 */
+                if (first != null && !startsWithPrep(said)) {
+                    lastActor = first.second
+                    actorAge = if (first.first <= 6) 0 else 2
+                    /* 这一段点到的名字全记下来，不只第一个。 */
+                    /* 露过面的都记，宾语位置上那个也算 —— 下一句轮到他说话。 */
+                    b.seen(said).take(4).forEach { touchName(it.second) }
+                    when (b.gender[first.second]) {
+                        "f" -> lastF = first.second
+                        "m" -> lastM = first.second
+                    }
+                } else if (first == null) {
+                    /* 段首没名字：没有代词就留上一位；有「她」「他」按性别接最近点过名的。
+性别表为空时仍留上一位。 */
+                    val pr = said.take(4)
+                    when {
+                        pr.startsWith("她们") || pr.startsWith("她") -> lastActor = lastF ?: lastActor
+                        pr.startsWith("他们") || pr.startsWith("他") -> lastActor = lastM ?: lastActor
+                    }
+                }
+            }
+
+            if (!hasDialog) {
+                /* 整段没有对白：纯旁白。 */
+                lastParaAllDialog = false
+                val whole = trimRange(para, 0, para.length)
+                if (whole != null) {
+                    cut(para, whole.first, whole.second, chunk) { a, b ->
+                        Wash.of(para.substring(a, b)).takeIf { it.isNotBlank() }?.let { t ->
+                            out.add(Line(t, false, "", p.narratorVoice, base + a, base + b, p.narratorStyle))
+                        }
+                    }
+                }
+                if (pEnd >= text.length) break else continue
+            }
+
+            val paraNames = namesIn(para, p.rules)
+            for ((idx, seg) in segs.withIndex()) {
+                val body = para.substring(seg.from, seg.to)
+                if (body.isBlank()) continue
+                val absA = base + seg.from
+                val absB = base + seg.to
+                if (!seg.isDialog) {
+                    cut(para, seg.from, seg.to, chunk) { a, b ->
+                        Wash.of(para.substring(a, b)).takeIf { it.isNotBlank() }?.let { t ->
+                            out.add(Line(t, false, "", p.narratorVoice, base + a, base + b, p.narratorStyle))
+                        }
+                    }
+                    continue
+                }
+                /* 引号里是拟声（「噗嗤！ */
+                if (Lines.isNoise(body) || allPunct(body)) {
+                    var kept = false
+                    cut(para, seg.from, seg.to, chunk) { a, b2 ->
+                        Wash.of(para.substring(a, b2)).takeIf { it.isNotBlank() }?.let { t ->
+                            out.add(Line(t, false, "", p.narratorVoice, base + a, base + b2, p.narratorStyle))
+                            kept = true
+                        }
+                    }
+                    if (kept) continue
+                }
+                val beforeCtx = if (idx > 0) para.substring(segs[idx - 1].from, segs[idx - 1].to).takeLast(140) else ""
+                /* 引号前那一截是不是旁白：前一段是对白时，它只是上一句话，不是引导语。 */
+                val beforeIsNarr = idx == 0 || !segs[idx - 1].isDialog
+                val afterCtx = if (idx + 1 < segs.size) para.substring(segs[idx + 1].from, segs[idx + 1].to).take(140) else ""
+                // 这一段里除了当前这句引号之外的全部文字。用来兜「整段只有一个人」。
+                val lead = StringBuilder(para.length).apply {
+                    append(para, 0, seg.from)
+                    if (seg.to <= para.length) append(para, seg.to, para.length)
+                }.toString().take(400)
+
+                var hit = matchRules(beforeCtx, afterCtx, p.rules)
+                var name = hit?.role
+                /* 手写规则没命中，走判定。硬的在前：名字紧贴引号 → 自称 → 段内两人 → 轮替 → 段主语。 */
+                if (name == null) name = p.ban?.let { Speaker.at(beforeCtx, afterCtx, lead, it, body) }
+                if (name == null) name = p.ban?.bySelf(body)
+                /* 引号前后挂着引导语，却认不出是谁 —— 那个人不在名单里。 */
+                if (name == null && beforeIsNarr && guessing(beforeCtx, lead, p.ban)) name = BLANK
+                if (name == null && paraNames.size > 1) {
+                    name = paraNames.firstOrNull { it != lastSpeaker } ?: paraNames.last()
+                }
+
+                if (name == null) {
+                    /* 靠推的几种，可靠度往下：上一段纯对白 → 这一段刚点的名 → 同段前一个引号。
+都不成立时短句取上一句的人。 */
+                    name = when {
+                        /* 上一段是纯对白：两人你来我往，这一句换人说。 */
+                        lastParaAllDialog && turnA != null && turnB != null ->
+                            if (lastSpeaker == turnA) turnB else turnA
+                        lastParaAllDialog && lastSpeaker != null ->
+                            otherThan(lastSpeaker) ?: lastSpeaker
+                        /* 这一段的旁白刚点过名，就是这一段的人。 */
+                        lastActor != null && actorAge <= ACTOR_FAR -> lastActor
+                        paraPrev != null -> paraPrev
+                        p.ban?.bySelf(body) != null -> p.ban?.bySelf(body)
+                        /* 短句：上一句是谁，这一句就是他。隔多远都认 —— 一声「是」不会换人。 */
+                        answerBody(body) && lastSpeaker != null -> lastSpeaker
+                        /* 短句再退一步：最近一次点名的人。 */
+                        answerBody(body) -> lastActor
+                        /* 最近只露过一个人：这一整段还没轮到别人出场，就是他。 */
+                        recent.size == 1 -> recent[0]
+                        /* 这一段只牵涉两个人：上一句是他，这一句换另一个。 */
+                        recent.size == 2 -> otherThan(lastSpeaker)
+                        /* 整段只有引号、没有一句旁白：这是两人你来我往的写法，换人比留空可靠。 */
+                        segs.all { it.isDialog } -> otherThan(lastSpeaker)
+                        /* 再多就留空 —— 三四个人里随便挑，等于瞎猜。 */
+                        else -> null
+                    }
+                }
+                // 规则里写了嗓子就用它；没写就按名字查一次；再没有就用白口那副。
+                val voice = hit?.voice?.takeIf { it.isNotBlank() }
+                    ?: (if (name != null && name != BLANK) voiceFor(name, p) else p.defaultVoice)
+                /* 单句改派。pins 的键是「这一句在本章正文里的起点」，跟 Line.srcStart 同一把尺子。 */
+                var who0: String? = null
+                cut(para, seg.from, seg.to, chunk) { a, b ->
+                    Wash.of(para.substring(a, b)).takeIf { it.isNotBlank() }?.let { t ->
+                        val raw = pins[base + a] ?: name
+                        val w = if (raw == BLANK) null else raw
+                        val v = when {
+                            w != null && w == name -> voice
+                            w != null -> voiceFor(w, p)
+                            else -> p.defaultVoice
+                        }
+                        out.add(Line(t, true, w.orEmpty(), v, base + a, base + b, w?.let { p.styles[it] }.orEmpty()))
+                        who0 = w
+                    }
+                }
+                val now = who0
+                if (now != null) {
+                    /* 换人了，就把这对人记下来，后面轮流说话用得上。 */
+                    if (lastSpeaker != null && now != lastSpeaker) {
+                        turnA = lastSpeaker
+                        turnB = now
+                    }
+                    lastSpeaker = now
+                    paraPrev = now
+                    touchName(now)
+                }
+                if (absB <= absA) continue
+            }
+            lastParaAllDialog = segs.isNotEmpty() && segs.all { it.isDialog }
+            if (pEnd >= text.length) break
+        }
+        return out
+    }
+
+    /** 引导语认不出人时占位用，落库时算留空。 */
+    private const val BLANK = "\u0000"
+
+    /** 引号前是一句以冒号收尾的引导语。 */
+    private fun guessing(before: String, lead: String, b: Ban?): Boolean {
+        if (b == null || before.isBlank()) return false
+        val t = before.trimEnd().trimEnd('“', '「', '『', '"', '\u3000', ' ', '\r')
+        if (!t.endsWith("：") && !t.endsWith(":")) return false
+        /* 主语是代词（「她又恢复了神色：」）：按性别能接回上一位，不算点名。 */
+        if (t.any { it in "她他我" }) return false
+        /* 这一段里有两个以上的人名，认不出是谁就不能往下猜 —— 猜出来的必是另一个。 */
+        return b.bare(lead).map { it.second }.distinct().size >= 2
+    }
+
+    /** 旁白点过一次名，隔几段以内还认。 */
+    private const val ACTOR_LIFE = 3
+    /** 再远就不认了：隔了这么多段还拿那个人顶，等于瞎猜。这一句进「没认出」。 */
+    private const val ACTOR_FAR = 8
+
+    /** 整句全是标点或拟声字。 */
+    private fun allPunct(body: String): Boolean {
+        val t = body.filter { it in '\u4e00'..'\u9fa5' }
+        if (t.isEmpty()) return true
+        if (t.length > 4) return false
+        return t.all { it in Words.noiseChars }
+    }
+
+    /** 这一句是不是一声应答。 */
+    private fun answerBody(body: String): Boolean {
+        val t = body.filter { it in '\u4e00'..'\u9fa5' }
+        if (t.isEmpty()) return false
+        if (t in Words.answers) return true
+        return t.length <= 2 && t !in Words.noise
+    }
+
+    private val PREP_HEAD = listOf(
+        "作为", "对于", "关于", "至于", "说到", "提到", "想到", "提起", "论起", "除了",
+        "由于", "因为", "为了", "趁着", "经过", "随着", "根据", "按照", "经过",
+    )
+
+    private fun startsWithPrep(s: String): Boolean = PREP_HEAD.any { s.startsWith(it) }
+
+    /** 把 [a,b) 按 chunk 上限切成几块，切点尽量落在句末。 */
+    private inline fun cut(
+        para: String,
+        a0: Int,
+        b0: Int,
+        chunk: Int,
+        emit: (Int, Int) -> Unit,
+    ) {
+        if (chunk <= 0 || b0 - a0 <= chunk) { emit(a0, b0); return }
+        var a = a0
+        while (a < b0) {
+            var b = (a + chunk).coerceAtMost(b0)
+            if (b < b0) {
+                var k = b
+                while (k > a + chunk / 3) {
+                    val c = para[k - 1]
+                    if (c == '。' || c == '！' || c == '？' || c == '；' || c == '…') break
+                    k--
+                }
+                if (k > a + chunk / 3) b = k
+            }
+            val t = trimRange(para, a, b)
+            if (t != null) emit(t.first, t.second)
+            a = b
+        }
+    }
+
+    /** 去掉首尾空白，返回新区间；全空白回 null。 */
+    private fun trimRange(s: String, a0: Int, b0: Int): Pair<Int, Int>? {
+        var a = a0
+        var b = b0
+        while (a < b && s[a].isWhitespace()) a++
+        while (b > a && s[b - 1].isWhitespace()) b--
+        return if (b > a) a to b else null
+    }
+
+    private class Seg(val isDialog: Boolean, val from: Int, val to: Int)
+
+    /** 把一段拆成（旁白 / 对白）交替的片段，带段内区间。 */
+    private fun splitQuotes(s: String): List<Seg> {
+        val res = ArrayList<Seg>()
+        var i = 0
+        var segStart = 0
+        while (i < s.length) {
+            val c = s[i]
+            val pair = QUOTE_PAIRS.firstOrNull { it.first == c }
+            if (pair == null) { i++; continue }
+            trimRange(s, segStart, i)?.let { res.add(Seg(false, it.first, it.second)) }
+            val from = i + 1
+            var j = from
+            var close = -1
+            while (j < s.length) {
+                if (s[j] == pair.second) { close = j; break }
+                j++
+            }
+            if (close < 0) {
+                // 引号没配对：剩下的都当旁白
+                trimRange(s, i, s.length)?.let { res.add(Seg(false, it.first, it.second)) }
+                return res
+            }
+            trimRange(s, from, close)?.let { res.add(Seg(true, it.first, it.second)) }
+            i = close + 1
+            segStart = i
+        }
+        trimRange(s, segStart, s.length)?.let { res.add(Seg(false, it.first, it.second)) }
+        return res
+    }
+
+    /** 找出文本里命中规则的音色（用于段落级共享）。 */
+    private fun namesIn(text: String, rules: List<Rule>): List<String> {
+        val hit = ArrayList<Pair<Int, String>>()
+        for (r in rules) {
+            val re = r.regex() ?: continue
+            val m = re.find(text) ?: continue
+            hit.add(m.range.first to r.role)
+        }
+        return hit.sortedBy { it.first }.map { it.second }.distinct()
+    }
+
+    /** 按顺序匹配规则，返回音色。 */
+    fun matchRules(before: String, after: String, rules: List<Rule>): Rule? {
+        for (r in rules) {
+            val re = r.regex() ?: continue
+            val hay = when (r.scope) {
+                Rule.Scope.BEFORE -> before
+                Rule.Scope.AFTER -> after
+                Rule.Scope.ANY -> "$before\n$after"
+            }
+            if (hay.isBlank()) continue
+            if (re.containsMatchIn(hay)) return r
+        }
+        return null
+    }
+
+    /** 这个角色用哪副嗓子。查角色表，查不到才用白口那副。 */
+    private fun voiceFor(name: String, p: CastProfile): String =
+        p.voices[name]?.takeIf { it.isNotBlank() } ?: p.defaultVoice
+
+    // ─────────── 内置模板 ───────────
+
+    /** 通用中文网文模板。覆盖：说道 / 道 / 笑道 / 冷声道 / 沉声 / 怒道 / 低声 / 开口 / 问 / 答 / 喝道 …名字用「2。 */
+    val TEMPLATE: String = """
+# 一行一条：谁 | 嗓音 | 正则 [| 后]
+# 正则里带竖线没问题，只切前两刀。
+
+# 名字在引号后面：「……，某某说道」
+某某 |  | ([\u4e00-\u9fa5]{2,4})(说道|问道|答道|笑道|冷笑道|沉声道|低声道|怒道|喝道|叹道|开口)
+
+# 名字在引号前面：「某某说道：“……”」
+某某 |  | ([\u4e00-\u9fa5]{2,4})(说道|问道|笑道|沉声道)|后
+
+# 只有称呼
+陛下 |  | (陛下|殿下|将军|大人|先生|姑娘|公子)(说道|道|开口)
+""".trim()
+
+    fun templateRules(): List<Rule> = listOf()
+}
