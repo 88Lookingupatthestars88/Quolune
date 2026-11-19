@@ -70,28 +70,28 @@ import java.util.Locale
 enum class StoreKind(val title: String, val note: String) {
     AUDIO(
         "念过的段落",
-        "点一句就重放。勾上删掉，那一段从此要重新去要。"
+        "勾选后可批量删除，删除后需重新获取。"
     ),
     /* 试听留下的，单列一本账。音色页点「听一下」、复刻页点「听听像不像」，念的都是同一句「这一段，念给你听。 */
     TRIAL(
         "试听留下的",
-        "点一下听个响造出来的，不是书里的字。删干净也不影响正文。"
+        "试听时生成的音频，不属于书中正文。删除后不影响正文。"
     ),
     COVER(
         "换过的封面",
-        "自己挑的那张。删掉，书就回到按书名生成的那块布面。"
+        "删除后，封面恢复为按书名生成的默认样式。"
     ),
     BOOK(
         "库里的书",
-        "删掉一本，正文一并从库里拿走，房里那一格也跟着空出来。"
+        "删除后正文一并移除，书房中的对应条目同时清空。"
     ),
     VOICE(
         "自配的嗓音",
-        "删掉一个，音色页里也就不再有它。"
+        "删除后，音色列表中不再列出该音色。"
     ),
     BG(
         "换过的底子",
-        "删掉一张，那一页就回到主题自带的底色。"
+        "删除后，该页面恢复为当前装帧自带的底色。"
     ),
 }
 
@@ -123,6 +123,8 @@ fun StoreScreen(
     val scope = rememberCoroutineScope()
     /** 正在删的进度：已删 / 总数。两格都是 0 = 没在删。 */
     var doing by remember { mutableStateOf(0 to 0) }
+    /** 等着确认的那一批。null = 没有在问。 */
+    var sure by remember { mutableStateOf<Set<String>?>(null) }
 
     BackHandler { onBack() }
 
@@ -258,7 +260,7 @@ fun StoreScreen(
                     } else if (picked.isNotEmpty()) {
                         Btn(
                             "删掉 ${picked.size} 件",
-                            { wipe(picked) },
+                            { sure = picked.toSet() },
                             BtnKind.DANGER
                         )
                     }
@@ -291,6 +293,17 @@ fun StoreScreen(
                     }
                 }
             }
+        }
+
+        sure?.let { ids ->
+            ConfirmSheet(
+                title = "删掉这 ${ids.size} 件？",
+                body = "删除后无法恢复。${kind.title}中的这些条目会一并移除。",
+                ok = "删掉 ${ids.size} 件",
+                kind = BtnKind.DANGER,
+                onOk = { sure = null; wipe(ids) },
+                onClose = { sure = null },
+            )
         }
 
         msg?.let { Toast(it) { msg = null } }

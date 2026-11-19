@@ -81,11 +81,8 @@ class App : Application() {
                 append('\n').append(t?.name).append('\n')
                 append(android.util.Log.getStackTraceString(e))
             }
+            /* 只写应用私有目录。外置那份在 Android 10 上别的应用读得到，不写。 */
             runCatching { File(filesDir, "last-crash.txt").writeText(dump) }
-            /* 再写一份到外置私有目录。只写主线程之外也不怕，runCatching 兜着。 */
-            runCatching {
-                getExternalFilesDir(null)?.let { File(it, "last-crash.txt").writeText(dump) }
-            }
             prev?.uncaughtException(t, e)
         }
     }

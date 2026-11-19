@@ -6,6 +6,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -1710,6 +1711,8 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                             hlFrom = markFrom, hlTo = markTo, selKey = selKey,
                                             onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis() },
                                             onTag = { abs -> whoAbs = abs },
+                                            selRect = if (bar.state == TextToolbarStatus.Shown) bar.rect else Rect.Zero,
+                                            onSelStart = { abs -> anchor = abs },
                                             onTap = { if (canTap()) desk = !desk },
                                             canTap = { canTap() },
                                             // 左右翻不用这条账：它按页切，不按块滚。
@@ -1863,6 +1866,8 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                     paraGap = effNow.paraGap,
                                     onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis(); guardAt = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset },
                                     onTag = { abs -> whoAbs = abs },
+                                    selRect = if (bar.state == TextToolbarStatus.Shown) bar.rect else Rect.Zero,
+                                    onSelStart = { abs -> anchor = abs },
                                     onTap = { if (canTap()) desk = !desk },
                                     canTap = { canTap() },
                                     onLaid = { ld, r -> laidMap[bi] = ld to r },
@@ -2386,6 +2391,10 @@ private fun BlockText(
     canTap: () -> Boolean,
     onLaid: (Laid, TextLayoutResult) -> Unit,
     onTag: ((Int) -> Unit)? = null,
+    /** 选区在窗口坐标里的外框。没选区就是 [Rect.Zero]。 */
+    selRect: Rect = Rect.Zero,
+    /** 选区落在这一块上时，把选中的第一个字报回去。 */
+    onSelStart: (Int) -> Unit = {},
     /** 这一块的名字签，和它的「第几版」[tagSig]。 */
     tag: java.util.SortedMap<Int, String>? = null,
     tagSig: Int = 0,
@@ -2407,6 +2416,7 @@ private fun BlockText(
             laid = laid, from = 0, to = laid.len, style = style,
             hlFrom = hlFrom, hlTo = hlTo, selKey = selKey,
             onDown = onDown, onTap = onTap, canTap = canTap, onLaid = onLaid, onTag = onTag,
+            selRect = selRect, onSelStart = onSelStart,
         )
     }
 }
@@ -2428,6 +2438,10 @@ private fun TextBlock(
     onLaid: ((Laid, TextLayoutResult) -> Unit)? = null,
     /** 点到名字签上。参数是那一段的全书偏移。 */
     onTag: ((Int) -> Unit)? = null,
+    /** 选区在窗口坐标里的外框。没选区就是 [Rect.Zero]。 */
+    selRect: Rect = Rect.Zero,
+    /** 选区落在这一块上时，把选中的第一个字报回去。 */
+    onSelStart: (Int) -> Unit = {},
 
 ) {
     val s = LocalSkin.current
@@ -2436,6 +2450,30 @@ private fun TextBlock(
     val lay = remember(laid, from) { Slot<TextLayoutResult>() }
     val a = if (hlFrom >= 0) laid.rendered(hlFrom) - from else -1
     val b = if (hlTo >= 0) laid.rendered(hlTo) - from else -1
+
+    var inWindow by remember { mutableStateOf(Rect.Zero) }
+
+    /* 选区给的是窗口坐标，版面是块内坐标。取落在选区里的第一个字：
+       「从这里读」该从选中的第一个字开口，不是手指最后按下的那个字。
+       只扫选区顶端那一行 —— 拖手柄时每帧都会走到这儿，整块逐字量会卡。 */
+    LaunchedEffect(selRect, inWindow) {
+        val l = lay.v ?: return@LaunchedEffect
+        if (selRect == Rect.Zero || inWindow == Rect.Zero) return@LaunchedEffect
+        if (!inWindow.contains(selRect.center)) return@LaunchedEffect
+        val r = selRect.translate(-inWindow.left, -inWindow.top)
+        val line = l.getLineForVerticalPosition((r.top + 1f).coerceAtLeast(0f))
+        if (line !in 0 until l.lineCount) return@LaunchedEffect
+        val s0 = l.getLineStart(line)
+        val e0 = l.getLineEnd(line, visibleEnd = true)
+        for (i in s0 until minOf(e0, body.length)) {
+            val box = runCatching { l.getBoundingBox(i) }.getOrNull() ?: continue
+            if (box.height < 0.5f) continue
+            if (box.left >= r.left - 2f && box.right <= r.right + 2f) {
+                onSelStart(laid.abs(from + i))
+                break
+            }
+        }
+    }
 
     key(selKey) {
         /* 选择域放在块自己身上，不往上包。这是 Compose 里选择与滚动抢同一份指针事件的必然冲突，不是参数没调好。 */
@@ -2451,6 +2489,7 @@ private fun TextBlock(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onGloballyPositioned { inWindow = it.boundsInWindow() }
                     .drawBehind {
                         if (a < 0 || b <= a) return@drawBehind
                         val l = lay.v ?: return@drawBehind
@@ -2665,7 +2704,7 @@ private fun PrepLine(prep: PrepNow?, gap: Int, nameOf: (Int) -> String) {
             .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
         if (row == null) {
-            T("还没备过。按下去就从下一章开始备。", size = 11, color = s.inkFaint)
+            T("尚未预缓存。按下方按钮从下一章开始。", size = 11, color = s.inkFaint)
         } else if (row.running) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2786,7 +2825,7 @@ private fun BookSetSheet(
                 TuneRow("lineGap", eff, ::tune)
                 TuneRow("padH", eff, ::tune)
                 TuneRow("paraGap2", eff, ::tune)
-                Row2("翻法", "左边左右翻，右边上下滚") {
+                Row2("翻法", "左右翻页或上下滚动") {
                     TwoPick(
                         listOf("左右翻", "上下滚"),
                         if (eff.turn == TurnMode.FLIP) 0 else 1,
@@ -2798,19 +2837,19 @@ private fun BookSetSheet(
                 // 显示的必须是**真正会用的那一副**。
                 // 存的那个名字可能早就不在音色库里了，
                 // 照抄它等于骗人；一副都挑不出来就写「未设置」。
-                Row2("旁白", "念叙述的那一副") {
+                Row2("旁白", "朗读旁白的音色") {
                     PickChip(narName.ifBlank { "未设置" }, narName.isNotBlank(), { pickVoice = "n" })
                 }
-                Row2("旁白调门", "留空就跟全局那档一样") {
+                Row2("旁白调门", "留空时沿用全局设置") {
                     PickChip(eff.narratorStyle.ifBlank { "跟随全局" }, eff.narratorStyle.isNotBlank(), { pickStyle = "n" })
                 }
-                Row2("对白", "念引号里的话") {
+                Row2("对白", "朗读对白的音色") {
                     PickChip(diaName.ifBlank { "未设置" }, diaName.isNotBlank(), { pickVoice = "d" })
                 }
-                Row2("对白调门", "留空就跟全局那档一样") {
+                Row2("对白调门", "留空时沿用全局设置") {
                     PickChip(eff.dialogStyle.ifBlank { "跟随全局" }, eff.dialogStyle.isNotBlank(), { pickStyle = "d" })
                 }
-                Row2("派角", "认出来是谁说的，就换一副嗓音") {
+                Row2("派角", "识别说话人后切换对应音色") {
                     PickChip("去设", false, { onCast() })
                 }
 

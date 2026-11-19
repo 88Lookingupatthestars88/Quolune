@@ -91,7 +91,7 @@ import com.pagefold.reader.field.Pages
 import com.pagefold.reader.field.Presets
 import com.pagefold.reader.field.Settings
 import com.pagefold.reader.field.TurnMode
-import com.pagefold.reader.field.VoiceSource
+import com.pagefold.reader.field.Vault
 import com.pagefold.reader.kit.BgImage
 import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
@@ -187,17 +187,18 @@ private fun TuneScreen(
     var homeAsk by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
 
-    var audioBytes by remember { mutableLongStateOf(0L) }
-    var audioCount by remember { mutableIntStateOf(0) }
-    var bookBytes by remember { mutableLongStateOf(0L) }
-    var bookCount by remember { mutableIntStateOf(0) }
-    var voiceBytes by remember { mutableLongStateOf(0L) }
-    var voiceCount by remember { mutableIntStateOf(0) }
-    var bgBytes by remember { mutableLongStateOf(0L) }
-    var bgCount by remember { mutableIntStateOf(0) }
-    var coverBytes by remember { mutableLongStateOf(0L) }
-    var coverCount by remember { mutableIntStateOf(0) }
-    var trialCount by remember { mutableIntStateOf(0) }
+    /* 初值取上一回的账，切页回来第一帧就是真数，不会先画一排 0。 */
+    var audioBytes by remember { mutableLongStateOf(Vault.audioBytes) }
+    var audioCount by remember { mutableIntStateOf(Vault.audioCount) }
+    var bookBytes by remember { mutableLongStateOf(Vault.bookBytes) }
+    var bookCount by remember { mutableIntStateOf(Vault.bookCount) }
+    var voiceBytes by remember { mutableLongStateOf(Vault.voiceBytes) }
+    var voiceCount by remember { mutableIntStateOf(Vault.voiceCount) }
+    var bgBytes by remember { mutableLongStateOf(Vault.bgBytes) }
+    var bgCount by remember { mutableIntStateOf(Vault.bgCount) }
+    var coverBytes by remember { mutableLongStateOf(Vault.coverBytes) }
+    var coverCount by remember { mutableIntStateOf(Vault.coverCount) }
+    var trialCount by remember { mutableIntStateOf(Vault.trialCount) }
 
     fun relist() {
         val ledger = app.synth.ledger()
@@ -216,11 +217,25 @@ private fun TuneScreen(
         voiceCount = app.box.custom().size
         val (bb, bn) = Bg.sizeOf(app)
         bgBytes = bb; bgCount = bn
+
+        Vault.audioBytes = audioBytes
+        Vault.audioCount = audioCount
+        Vault.bookBytes = bookBytes
+        Vault.bookCount = bookCount
+        Vault.voiceBytes = voiceBytes
+        Vault.voiceCount = voiceCount
+        Vault.bgBytes = bgBytes
+        Vault.bgCount = bgCount
+        Vault.coverBytes = coverBytes
+        Vault.coverCount = coverCount
+        Vault.trialCount = trialCount
     }
 
     /* 数账。enginesJson 每敲一个字就变一次，直接跟着它跑就是每敲一下全盘扫一遍：账本里的每一段都要 File.length()。 */
+    var scanned by remember { mutableStateOf(false) }
     LaunchedEffect(s.enginesJson) {
-        delay(400)
+        if (scanned) delay(400)
+        scanned = true
         val bad = withContext(Dispatchers.IO) { runCatching { relist() }.exceptionOrNull() }
         if (bad != null) {
             msg = "库房那几行没数出来：" + (bad.message ?: bad.javaClass.simpleName)
@@ -432,7 +447,7 @@ private fun TuneScreen(
                         Sample(s)
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "书架上已有的书不受影响。改那一本，进书里点「怎么读」。",
+                            "改动自下一次导入起生效，已导入的书保持原样。单本调整在该书的「怎么读」中进行。",
                             fontSize = 11.sp, color = skin.inkFaint, lineHeight = 17.sp,
                         )
                         Spacer(Modifier.height(6.dp))
@@ -447,25 +462,25 @@ private fun TuneScreen(
                                 "字号", s.fontSize.toFloat(), 13f, 30f, 1f,
                                 { app.field.edit { c -> c.copy(fontSize = it.roundToInt()) } },
                                 unit = "sp", low = "13", high = "30",
-                                hint = "字多大。默认 19。"
+                                hint = "正文字号，单位 sp。默认 19。"
                             )
                             Ruler(
                                 "行距", s.lineGap.toFloat(), 110f, 220f, 5f,
                                 { app.field.edit { c -> c.copy(lineGap = it.roundToInt()) } },
                                 unit = "%", low = "110", high = "220",
-                                hint = "行距按字号的百分比算，150 就是 1.5 倍。"
+                                hint = "行高与字号的百分比，150 即 1.5 倍行高。"
                             )
                             Ruler(
                                 "页边距", s.padH.toFloat(), 8f, 48f, 2f,
                                 { app.field.edit { c -> c.copy(padH = it.roundToInt()) } },
                                 unit = "dp", low = "8", high = "48",
-                                hint = "左右留多少白。留得多，一行字就少。"
+                                hint = "正文左右边距，单位 dp。数值增大，单行字数减少。"
                             )
                             Ruler(
                                 "段间距", s.paraGap.toFloat(), 0f, 40f, 2f,
                                 { app.field.edit { c -> c.copy(paraGap = it.roundToInt()) } },
                                 unit = "sp", low = "0", high = "40",
-                                hint = "两段之间再空一点。0 就是贴住，只换一行。"
+                                hint = "段落间的额外空白，单位 sp。0 表示不加空白，仅换行。"
                             )
                             Spacer(Modifier.height(6.dp))
                             Btn(
@@ -494,19 +509,19 @@ private fun TuneScreen(
                                 "往前带几句", s.context.toFloat(), 0f, 20f, 1f,
                                 { app.field.edit { c -> c.copy(context = it.roundToInt()) } },
                                 unit = "句", low = "0", high = "20",
-                                hint = "合成这一句时，连前几句一起发过去，引擎据此接住上一句的口气。只是多花几个字，不会念出来。"
+                                hint = "合成时附带的上文句数。上文随请求一同发送，用于延续语气，只用于朗读更加顺畅，不会单独念出。"
                             )
                             Ruler(
                                 "往后带几句", s.next.toFloat(), 0f, 20f, 1f,
                                 { app.field.edit { c -> c.copy(next = it.roundToInt()) } },
                                 unit = "句", low = "0", high = "20",
-                                hint = "连后几句一起发。下一句马上有人接话，引擎就会把这一句收着尾，不留长气口。"
+                                hint = "合成时附带的下文句数。下文随请求一同发送，用于判断句末停顿，只用于朗读更加顺畅，不会单独念出。"
                             )
                             RowLine("按段落断语气") {
                                 Pill(s.cue) { app.field.edit { c -> c.copy(cue = it) } }
                             }
                             Text(
-                                "先判这一句是旁白、对白、喊还是耳语，再按各自定下的快慢高低去合成。",
+                                "按每个句子判定语气类型，分别调整语速和音高。",
                                 fontSize = 11.sp, color = skin.inkFaint, lineHeight = 16.sp,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
@@ -516,39 +531,39 @@ private fun TuneScreen(
                                 "先备几段", s.prefetch.toFloat(), 1f, 12f, 1f,
                                 { app.field.edit { c -> c.copy(prefetch = it.roundToInt()) } },
                                 unit = "段", low = "1", high = "12",
-                                hint = "念着这一段的时候，后面这几段已经在合成。留得多，网络抖一下不断；留太多，引擎被占着，开头慢半拍。"
+                                hint = "预取段数。播放当前段时，后续段落提前合成。数值增大，网络波动时中断更少，并发占用与起播延迟同时上升。"
                             )
                             Ruler(
                                 "同时开几路", s.concurrency.toFloat(), 1f, 4f, 1f,
                                 { app.field.edit { c -> c.copy(concurrency = it.roundToInt()) } },
                                 unit = "路", low = "1", high = "4",
-                                hint = "对同一家服务同时发几条请求。两路是这个尺寸的手机上的平衡点：再往上，首句不会更快，只会更容易被对面按 429 挡回来。"
+                                hint = "对同一服务商的并发请求上限。超过两路后首句不再提前，返回 429 的概率上升。"
                             )
                             Ruler(
-                                "隔多久再开口", (s.reqIntervalMs / 100f).coerceIn(0f, 30f), 0f, 30f, 1f,
+                                "传输间隔", (s.reqIntervalMs / 100f).coerceIn(0f, 30f), 0f, 30f, 1f,
                                 { app.field.edit { c -> c.copy(reqIntervalMs = (it * 100).roundToInt()) } },
                                 unit = "秒", low = "0", high = "3.0",
                                 format = { "%.1f".format(it / 10f) },
-                                hint = "对同一家服务，两次请求之间至少隔这么久。这是本地的一道闸门，不是引擎的快慢：调小，下一段来得快，但更容易被对面挡回来；调大，稳，代价是接得慢。看到「取得太急了」，就把这格往上推。"
+                                hint = "向同一服务商发起两次请求的最小间隔，本机限流，与合成速度无关。数值减小，后续段落到达更快，触发限流的概率上升；数值增大，请求更稳，出音延迟增加。出现「服务商已限流」时上调此项。"
                             )
                             Ruler(
-                                "不成再试几回", s.retry.toFloat(), 0f, 5f, 1f,
+                                "遇到失误，重试", s.retry.toFloat(), 0f, 5f, 1f,
                                 { app.field.edit { c -> c.copy(retry = it.roundToInt()) } },
-                                unit = "回", low = "0", high = "5",
-                                hint = "超时、429、空音频，都算没取到，就再跑一趟。0 = 取不到就跳过这一段，接着念下一段。"
+                                unit = "次", low = "0", high = "5",
+                                hint = "单段合成失败后的重试次数。超时、429、返回空音频均计为失败。0 表示不重试，该段跳过，继续合成下一段。"
                             )
                             Ruler(
-                                "每回之间等多久", (s.retryDelayMs / 100f).coerceIn(2f, 50f), 2f, 50f, 2f,
+                                "失误后等待时长", (s.retryDelayMs / 100f).coerceIn(2f, 50f), 2f, 50f, 2f,
                                 { app.field.edit { c -> c.copy(retryDelayMs = (it * 100).roundToInt()) } },
-                                unit = "毫秒", low = "0.2 秒", high = "5.0 秒",
+                                unit = "秒", low = "0.2 秒", high = "5.0 秒",
                                 format = { "%.1f".format(it / 10f) },
-                                hint = "两次重试之间的间隔。对面抽风时，隔得越短，越容易连着撞同一堵墙。"
+                                hint = "两次重试之间的固定间隔，单位秒。取值过小时，同一故障在短时间内被连续命中，重试成功率下降。"
                             )
                             Ruler(
                                 "往后先备几章", s.cacheChapters.toFloat(), 0f, 20f, 1f,
                                 { app.field.edit { c -> c.copy(cacheChapters = it.roundToInt()) } },
-                                unit = "回", low = "0", high = "20",
-                                hint = "从这一章往后，先把这几章的音频合好存在本机。断网、进地铁也还能听一段；占的空间也按这个数涨。"
+                                unit = "章", low = "0", high = "20",
+                                hint = "预缓存章数。当前章之后的若干章音频提前合成并存入本机。数值增大，离线可播时长增加，占用存储同比例上升。"
                             )
                             Spacer(Modifier.height(6.dp))
                             Btn(
@@ -579,44 +594,36 @@ private fun TuneScreen(
                         VaultRow(
                             "念过的段落",
                             "$audioCount 段 · ${size(audioBytes)}",
-                            "每句都在里头，随时重放。",
                             onClick = { toVault(StoreKind.AUDIO) }
                         )
                         Hair()
                         VaultRow(
                             "库里的书",
                             "$bookCount 本 · ${size(bookBytes)}",
-                            "抄进库的正文，原文件删了也照读。",
                             onClick = { toVault(StoreKind.BOOK) }
                         )
                         Hair()
                         VaultRow(
                             "自配的嗓音",
                             "$voiceCount 个 · ${size(voiceBytes)}",
-                            "自己写下的那些。",
                             onClick = { toVault(StoreKind.VOICE) }
                         )
-                        if (trialCount > 0) {
-                            Hair()
-                            VaultRow(
-                                "试听留下的",
-                                "$trialCount 段",
-                                "点一下听个响造的，不是书里的字。",
-                                onClick = { toVault(StoreKind.TRIAL) }
-                            )
-                        }
+                        Hair()
+                        VaultRow(
+                            "试听留下的",
+                            "$trialCount 段",
+                            onClick = { toVault(StoreKind.TRIAL) }
+                        )
                         Hair()
                         VaultRow(
                             "换过的封面",
                             "$coverCount 张 · ${size(coverBytes)}",
-                            "自己挑的那张，删掉就回布面。",
                             onClick = { toVault(StoreKind.COVER) }
                         )
                         Hair()
                         VaultRow(
                             "换过的底子",
                             "$bgCount 张 · ${size(bgBytes)}",
-                            "挑来的图，缩过再存。",
                             onClick = { toVault(StoreKind.BG) }
                         )
                     }
@@ -1629,7 +1636,7 @@ private fun InlineField(
 // ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun VaultRow(name: String, amount: String, note: String, onClick: () -> Unit) {
+private fun VaultRow(name: String, amount: String, onClick: () -> Unit) {
     val s = LocalSkin.current
     Row(
         Modifier
@@ -1644,8 +1651,6 @@ private fun VaultRow(name: String, amount: String, note: String, onClick: () -> 
                 Spacer(Modifier.weight(1f))
                 Text(amount, fontSize = 11.sp, color = s.inkDim)
             }
-            Spacer(Modifier.height(5.dp))
-            Text(note, fontSize = 11.sp, color = s.inkFaint, lineHeight = 17.sp)
         }
         Spacer(Modifier.width(6.dp))
         Icon(

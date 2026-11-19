@@ -22,7 +22,7 @@ data class LedgerEntry(
     val voice: String,
     val at: Long,
     val ext: String,
-    /** 这一条是「点一下听个响」造出来的，不是书里的正文。 */
+    /** 这一条由试听生成，不属于书中正文。 */
     val trial: Boolean = false,
 )
 

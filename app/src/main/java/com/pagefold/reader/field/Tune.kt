@@ -11,22 +11,22 @@ object Tune {
         // ── 版式 ──
         //
         // 这五格属于这本书自己，不写全局（field/Settings）。收书时从定音抄一份，之后各改各的。
-        Triple("fontSize", "字号", "字多大"),
-        Triple("lineGap", "行距", "按字号的百分比"),
-        Triple("padH", "左右留白", "留得多，一行字就少"),
-        Triple("paraGap2", "段间距", "两段之间空多少"),
+        Triple("fontSize", "字号", "正文字号，单位 sp"),
+        Triple("lineGap", "行距", "行高与字号的百分比"),
+        Triple("padH", "左右留白", "正文左右边距，数值增大则单行字数减少"),
+        Triple("paraGap2", "段间距", "段落间的额外空白，0 表示仅换行"),
         Triple("turn", "翻法", "0 左右翻，1 上下滚"),
         // ── 读法 ──
-        Triple("context", "前情", "合成时连前几句一起发，接住上一句的口气；只是多花几个字，不念出来"),
-        Triple("next", "后话", "连后几句一起发，判这一句该不该收着尾"),
-        Triple("prefetch", "先备几段", "念着这一段，后面几段已经在合成，断一下网也不停"),
-        Triple("chunkChars", "一气念多少字", "一次合成多长。长了出声慢，短了请求碎"),
-        Triple("cacheChapters", "往后先备几章", "从这一章往后先合几章存在本机，断网也能听"),
-        Triple("gapMs", "两句之间歇多久", "念完一句停一下。太短像赶，太长像卡"),
-        Triple("reqIntervalMs", "隔多久再开口", "对同一家服务两次请求之间至少隔这么久，是限速闸，不是引擎慢"),
-        Triple("retry", "不成再试几回", "超时、429、空音频都算没取到，再跑一趟"),
-        Triple("retryDelayMs", "每回之间等多久", "两次重试之间隔多久。越短越容易连着撞墙"),
-        Triple("concurrency", "同时开几路", "同时发几条。两路是平衡点，再多容易被挡回来"),
+        Triple("context", "前情", "合成时附带的上文句数，用于延续语气，不会单独念出"),
+        Triple("next", "后话", "合成时附带的下文句数，用于判断句末停顿，不会单独念出"),
+        Triple("prefetch", "先备几段", "预取段数，播放当前段时后续段落提前合成"),
+        Triple("chunkChars", "一气念多少字", "单次合成的字数上限。数值增大则出音延迟增加，数值减小则请求次数增加"),
+        Triple("cacheChapters", "往后先备几章", "当前章之后预缓存并存入本机的章数"),
+        Triple("gapMs", "两句之间歇多久", "句与句之间的停顿，单位毫秒"),
+        Triple("reqIntervalMs", "传输间隔", "向同一服务商发起两次请求的最小间隔，本机限流，与合成速度无关"),
+        Triple("retry", "遇到失误，重试", "单段合成失败后的重试次数，0 表示不重试，该段跳过"),
+        Triple("retryDelayMs", "失误后等待时长", "两次重试之间的固定间隔，单位毫秒"),
+        Triple("concurrency", "同时开几路", "对同一服务商的并发请求上限"),
     )
 
     /** 每一格的上下限与步长。 */
@@ -56,9 +56,9 @@ object Tune {
         "context", "next" -> "句"
         "prefetch" -> "段"
         "chunkChars" -> "字"
-        "cacheChapters" -> "回"
-        "gapMs", "reqIntervalMs", "retryDelayMs" -> "ms"
-        "retry" -> "回"
+        "cacheChapters" -> "章"
+        "gapMs", "reqIntervalMs", "retryDelayMs" -> "毫秒"
+        "retry" -> "次"
         "concurrency" -> "路"
         else -> ""
     }

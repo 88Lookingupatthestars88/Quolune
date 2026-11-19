@@ -2,8 +2,6 @@ package com.pagefold.reader.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -90,7 +88,6 @@ import com.pagefold.reader.voice.Voice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /** 派角。一本书一张表。三段：旁白和对白 → 角色 → 规则。 */
 @Composable
@@ -289,27 +286,6 @@ fun CastScreen(
         app.getSystemService(ClipboardManager::class.java)
             ?.setPrimaryClip(ClipData.newPlainText("派角", body))
         say("复制好了")
-    }
-
-    fun shareOut(body: String, name: String) {
-        scope.launch {
-            val f = withContext(Dispatchers.IO) {
-                val dir = File(app.getExternalFilesDir(null) ?: app.filesDir, "cast")
-                if (!dir.exists()) dir.mkdirs()
-                runCatching { File(dir, name).also { it.writeText(body) } }.getOrNull()
-            }
-            if (f == null) { copyOut(body); return@launch }
-            runCatching {
-                app.startActivity(
-                    Intent.createChooser(
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = "application/octet-stream"
-                            putExtra(Intent.EXTRA_STREAM, Uri.fromFile(f))
-                        }, "发到"
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }
-        }
     }
 
     val title = (book?.title ?: "派角").take(16).ifBlank { "cast" }
@@ -1001,8 +977,6 @@ writeFile.launch("$title.txt")
 }, BtnKind.GHOST, Modifier.fillMaxWidth())
 Spacer(Modifier.height(8.dp))
 Btn("复制到剪贴板", { copyOut(RuleCodec.toJson(cast)) }, BtnKind.GHOST, Modifier.fillMaxWidth())
-Spacer(Modifier.height(8.dp))
-Btn("发到别处", { shareOut(RuleCodec.toJson(cast), "$title.cast") }, BtnKind.GHOST, Modifier.fillMaxWidth())
 Spacer(Modifier.height(12.dp))
 Text(
 "文本是一行一组，手改方便，也能直接导回来：\n" +
@@ -2144,7 +2118,7 @@ private fun UnsureSheet(
 
 /** 一句话的确认纸。不写「确定 / 取消」：两颗按钮上都该写清这一下会发生什么。 */
 @Composable
-private fun ConfirmSheet(
+internal fun ConfirmSheet(
     title: String,
     body: String,
     ok: String,

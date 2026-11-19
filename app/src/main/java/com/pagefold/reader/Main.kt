@@ -46,6 +46,8 @@ import com.pagefold.reader.kit.BgLayer
 import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.ThemeId
 import com.pagefold.reader.ui.AboutScreen
+import com.pagefold.reader.ui.CONSENT_REV
+import com.pagefold.reader.ui.ConsentScreen
 import com.pagefold.reader.ui.LibraryScreen
 import com.pagefold.reader.ui.PreviewScreen
 import com.pagefold.reader.ui.ReadScreen
@@ -109,6 +111,16 @@ private fun Modifier.fillRest(): Modifier = this.layout { measurable, constraint
 
 @Composable
 private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
+    /* 没同意过条款的人，先看那一屏。同意之后 consentRev 变 1，之后每次进来都走下面。 */
+    if (s.consentRev < CONSENT_REV) {
+        ConsentScreen(app)
+        return
+    }
+    Home(s, app, jumpVoice)
+}
+
+@Composable
+private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
     var tab by remember { mutableIntStateOf(if (jumpVoice) 1 else s.homeTab.coerceIn(0, 4)) }
     var book by remember { mutableStateOf<BookMeta?>(null) }
 

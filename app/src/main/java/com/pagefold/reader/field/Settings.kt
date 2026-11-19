@@ -25,7 +25,7 @@ enum class EngineKind { MIMO, SYSTEM }
 /** 全部可调项。整体序列化成一个 JSON 存在 SharedPreferences，加字段不用迁移，旧版本读到没有的字段自动用默认值。 */
 data class Settings(
     // 外观
-    val theme: String = "glass",
+    val theme: String = "paper",
     val dark: Boolean = false,
     val shelfBg: String = "auto",       // 旧字段，只用来迁移
     val shelfDim: Int = 55,             // 旧字段，界面上已经不给调了
@@ -41,6 +41,8 @@ data class Settings(
     val homeTab: Int = 3,
     val choseHome: Boolean = false,
     val uiRev: Int = 0,
+    /** 已同意的条款版本。0 = 没同意过。政策大改时把 Consent.CONSENT_REV 加一。 */
+    val consentRev: Int = 0,
 
     // 阅读
     val fontSize: Int = 19,

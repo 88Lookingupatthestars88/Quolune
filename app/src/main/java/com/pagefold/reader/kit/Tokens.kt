@@ -234,7 +234,7 @@ enum class ThemeId(val key: String, val label: String, val tagline: String, val 
     fun skin(dark: Boolean) = if (dark) this.dark else this.light
 
     companion object {
-        fun of(key: String?): ThemeId = entries.firstOrNull { it.key == key } ?: GLASS
+        fun of(key: String?): ThemeId = entries.firstOrNull { it.key == key } ?: PAPER
     }
 }
 

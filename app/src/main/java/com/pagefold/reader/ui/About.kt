@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -146,6 +147,100 @@ fun AboutScreen(
             }
         }
         item { Spacer(Modifier.height(10.dp)) }
+
+        /* 免责声明：九条全文铺开。折起来等于没写，读者点开之前什么都看不到。 */
+        item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 26.dp)) }
+        item {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
+                    .padding(top = 20.dp, bottom = 12.dp)
+            ) {
+                Text(
+                    "免责声明",
+                    fontSize = 15.sp,
+                    color = skin.ink,
+                    fontFamily = skin.titleFont,
+                    letterSpacing = 2.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Body(Legal.IMPORTANT)
+            }
+        }
+        items(Legal.CLAUSES) { (title, text) ->
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
+                    .padding(bottom = 16.dp)
+            ) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    color = skin.ink,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = skin.titleFont,
+                    letterSpacing = 0.5.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text,
+                    fontSize = 13.sp,
+                    lineHeight = 26.sp,
+                    color = skin.inkDim,
+                )
+            }
+        }
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = Sz.gutter).padding(bottom = 10.dp)) {
+                Text(
+                    "使用本应用即代表您已阅读、理解并同意本声明的全部条款。",
+                    fontSize = 13.sp,
+                    lineHeight = 26.sp,
+                    color = skin.ink,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+        }
+
+        /* 隐私政策：与免责声明同一层，各自全文铺开。 */
+        item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 20.dp)) }
+        item {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
+                    .padding(top = 20.dp, bottom = 12.dp)
+            ) {
+                Text(
+                    "隐私政策",
+                    fontSize = 15.sp,
+                    color = skin.ink,
+                    fontFamily = skin.titleFont,
+                    letterSpacing = 2.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                Body("本应用没有服务器，不收集、不上传、不存储您的任何个人信息。")
+            }
+        }
+        items(Legal.PRIVACY) { (title, text) ->
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
+                    .padding(bottom = 16.dp)
+            ) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    color = skin.ink,
+                    fontWeight = FontWeight.Medium,
+                    fontFamily = skin.titleFont,
+                    letterSpacing = 0.5.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text,
+                    fontSize = 13.sp,
+                    lineHeight = 26.sp,
+                    color = skin.inkDim,
+                )
+            }
+        }
+        item { Spacer(Modifier.height(14.dp)) }
     }
 }
 
