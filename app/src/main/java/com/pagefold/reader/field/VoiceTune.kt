@@ -57,7 +57,7 @@ class VoiceTune(ctx: Context) {
             gson.fromJson<MutableMap<String, Vt>>(f.readText(), type)
                 ?: mutableMapOf()
         }.getOrDefault(mutableMapOf())
-        /* 老存档里没有后来才加的那几个键，Gson 不走 Kotlin 构造器、也不看可空性，照直往字段里塞 null —— 一读就是 NPE。 */
+        /* 缺键时 Gson 不走 Kotlin 构造器、也不看可空性，照直往字段里塞 null —— 一读就是 NPE。 */
         val clean = m.mapValues { (_, v) ->
             v.copy(
                 mood = v.mood ?: "",

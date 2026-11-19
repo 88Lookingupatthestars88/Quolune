@@ -661,7 +661,7 @@ fun CastScreen(
                 onToggle = { n -> sel = if (n in sel) sel - n else sel + n },
                 onClose = { grouping = false },
                 onOk = {
-                    /* 挑中的要是一个已经并好的组，带过来的是它里面的人，不是组名 ——把组名当成一个人并进新组，原来那组的人就没地方去了。 */
+                    /* 挑中的要是一个已经并好的组，带过来的是它里面的人，不是组名。组名不是成员，混进新组会让那一组的人失去归属。 */
                     val members = all.filter { it.name in sel }
                         .flatMap { r -> if (r.alt.isEmpty()) listOf(r.name) else r.alt }
                         .distinct()

@@ -271,29 +271,30 @@ fun VoiceScreen(
                         SealMark("音色", 42.dp)
                     }
                     Ornament(Modifier.padding(horizontal = Sz.gutter))
-                    Row(
+                    /* 两行：上一行副数加在用，下一行家名。家名随开的家数变长，单独一行才不会把上一行挤窄。 */
+                    Column(
                         Modifier.fillMaxWidth()
-                            .padding(start = Sz.gutter, end = Sz.gutter, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(start = Sz.gutter, end = Sz.gutter, bottom = 6.dp)
                     ) {
-                        // 一副都没有的时候，上面那句题词已经说了。
-                        // 这里再报一次「还没有能用的嗓子」，是同一句话说两遍。
                         if (pool.isNotEmpty()) {
-                            Text("${pool.size} 副嗓音", fontSize = 11.sp, color = skin.inkDim)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${pool.size} 副嗓音", fontSize = 11.sp, color = skin.inkDim)
+                                Spacer(Modifier.width(7.dp))
+                                Text("·", fontSize = 11.sp, color = skin.hair)
+                                Spacer(Modifier.width(7.dp))
+                                Text(
+                                    "在用 " + currentName.ifBlank { "未设置" },
+                                    fontSize = 11.sp, color = skin.flame,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                            }
                         }
                         if (onEngines.isNotBlank() && pool.isNotEmpty()) {
-                            Spacer(Modifier.width(7.dp))
-                            Text("·", fontSize = 11.sp, color = skin.hair)
-                            Spacer(Modifier.width(7.dp))
-                            Text(onEngines, fontSize = 11.sp, color = skin.inkFaint)
-                        }
-                        if (pool.isNotEmpty()) {
-                            Spacer(Modifier.width(7.dp))
-                            Text("·", fontSize = 11.sp, color = skin.hair)
-                            Spacer(Modifier.width(7.dp))
+                            Spacer(Modifier.height(3.dp))
                             Text(
-                                "在用 " + currentName.ifBlank { "未设置" },
-                                fontSize = 11.sp, color = skin.flame
+                                onEngines, fontSize = 11.sp, lineHeight = 16.sp,
+                                color = skin.inkFaint
                             )
                         }
                     }
@@ -796,12 +797,14 @@ private fun CardVoice(
             )
         }
         Spacer(Modifier.height(7.dp))
-        /* 卡上这一行要把「造出来的」和「复刻的」说清：造的那种每次念书都重新生成，今天和下周可能不是同一个人；复刻的声纹已经锁住。 */
-        Text(
-            v.desc.ifBlank { nameOf(v.engine, engines) },
-            fontSize = 11.sp, color = s.inkDim, lineHeight = 16.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
+        /* 描述为空就不画这一行。家名右上角已经有一份。 */
+        if (v.desc.isNotBlank()) {
+            Text(
+                v.desc,
+                fontSize = 11.sp, color = s.inkDim, lineHeight = 16.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+        }
         Spacer(Modifier.weight(1f))
         Row(
             Modifier.fillMaxWidth(),
