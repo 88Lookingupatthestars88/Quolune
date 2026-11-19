@@ -264,14 +264,15 @@ fun VoiceScreen(
         LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
 
             item {
-                // 台头两行（主标题 + 一句话），下面跟一行现状：几副、开的是哪路、在用谁。
+                // 台头两行（主标题 + 一句话），下面跟现状：几副、在用谁；开了多家时再列一行家名。
                 val onEngines = enginesOn(s)
+                val oneLine = onEngines.size == 1
                 Column(Modifier.fillMaxWidth().statusBarsPadding()) {
                     Masthead(title = "声音宝库", word = "让声音寻找它的主人。") {
                         SealMark("音色", 42.dp)
                     }
                     Ornament(Modifier.padding(horizontal = Sz.gutter))
-                    /* 两行：上一行副数加在用，下一行家名。家名随开的家数变长，单独一行才不会把上一行挤窄。 */
+                    /* 家名只开一家时并入主行；两家以上另起一行，随屏宽折行，主行高度不受它们影响。 */
                     Column(
                         Modifier.fillMaxWidth()
                             .padding(start = Sz.gutter, end = Sz.gutter, bottom = 6.dp)
@@ -279,6 +280,12 @@ fun VoiceScreen(
                         if (pool.isNotEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("${pool.size} 副嗓音", fontSize = 11.sp, color = skin.inkDim)
+                                if (oneLine) {
+                                    Spacer(Modifier.width(7.dp))
+                                    Text("·", fontSize = 11.sp, color = skin.hair)
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(onEngines[0], fontSize = 11.sp, color = skin.inkFaint)
+                                }
                                 Spacer(Modifier.width(7.dp))
                                 Text("·", fontSize = 11.sp, color = skin.hair)
                                 Spacer(Modifier.width(7.dp))
@@ -290,10 +297,10 @@ fun VoiceScreen(
                                 )
                             }
                         }
-                        if (onEngines.isNotBlank() && pool.isNotEmpty()) {
+                        if (onEngines.size > 1 && pool.isNotEmpty()) {
                             Spacer(Modifier.height(3.dp))
                             Text(
-                                onEngines, fontSize = 11.sp, lineHeight = 16.sp,
+                                onEngines.joinToString(" · "), fontSize = 11.sp, lineHeight = 16.sp,
                                 color = skin.inkFaint
                             )
                         }
@@ -648,14 +655,14 @@ private fun openTtsSettings(ctx: Context): Boolean {
 }
 
 /** 现在开着哪几路嗓源，一行写完。没开就空串。 */
-private fun enginesOn(s: Settings): String =
+private fun enginesOn(s: Settings): List<String> =
     s.engines.filter { it.on }.map {
         when (it.src) {
             com.pagefold.reader.field.VoiceSource.MIMO -> "MiMo"
             com.pagefold.reader.field.VoiceSource.SYSTEM -> "本机语音"
             com.pagefold.reader.field.VoiceSource.OPENAI -> it.name.ifBlank { "自建" }
         }
-    }.joinToString(" · ")
+    }
 
 /**
 * 重名就加序号。
