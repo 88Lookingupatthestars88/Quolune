@@ -82,17 +82,14 @@ class TtsEngine : TextToSpeechService() {
 
     private fun tag(v: Voice): String = "tl:" + v.id
 
-    /** 调用方挑的是哪副嗓子。SynthesisRequest.getVoiceName() 是隐藏方法，只能反射；拿不到就当没指定。 */
-    private fun voiceNameOf(r: SynthesisRequest): String? = runCatching {
-        val m = r.javaClass.getMethod("getVoiceName")
-        m.isAccessible = true
-        m.invoke(r) as? String
-    }.getOrNull()
+    /** 调用方挑的是哪副嗓子。空 = 没指定，按默认那副念。 */
+    private fun voiceNameOf(r: SynthesisRequest): String? =
+        runCatching { r.voiceName }.getOrNull()?.takeIf { it.isNotBlank() }
 
+    /** 其他应用调用时可用的话音：与书里能挑的一致，含本机引擎那几副。 */
     private fun pool(): List<Voice> {
         val s = app.field.now
-        val mine = Catalog.ours(s.engines, app.box.custom(), emptyList())
-            .filter { it.engine != "system" }
+        val mine = Catalog.ours(s.engines, app.box.custom())
         return mine.ifEmpty { Catalog.MIMO }
     }
 
@@ -133,13 +130,14 @@ class TtsEngine : TextToSpeechService() {
             return
         }
 
-        val speed = runCatching { request.speechRate }.getOrDefault(100).let {
+        /* 音色页调过这一副就用它那套；没调过才听系统来的，系统没给就用全局。 */
+        val own = if (app.vtune.has(v.id)) app.vtune.of(v.id) else null
+        val speed = own?.speed ?: runCatching { request.speechRate }.getOrDefault(100).let {
             if (it in 20..400) it else s.speed
         }
-        val pitch = runCatching { request.pitch }.getOrDefault(100).let {
+        val pitch = own?.pitch ?: runCatching { request.pitch }.getOrDefault(100).let {
             if (it in 20..400) it else s.pitch
         }
-        val tuned = s.copy(speed = speed, pitch = pitch)
 
         var fed = 0
         var failed = 0
@@ -151,7 +149,12 @@ class TtsEngine : TextToSpeechService() {
                 val reading = Cue.of(piece, null, null, s.style, !s.cue)
                 val dark = if (v.reactsToStyle) reading else null
                 val clip = runCatching {
-                    kotlinx.coroutines.runBlocking { app.synth.make(tuned, v, piece, dark, null) }
+                    kotlinx.coroutines.runBlocking {
+                        app.synth.make(
+                            s, v, piece, dark, null,
+                            bakeSpeed = speed, bakePitch = pitch,
+                        )
+                    }
                 }.getOrNull()
                 if (clip == null) {
                     failed++

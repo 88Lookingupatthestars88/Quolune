@@ -35,8 +35,13 @@ object Audition {
         }
     }
 
-    /** 播一个本地文件。失败回 false，不抛。 */
-    fun play(id: String, path: String): Boolean {
+    /**
+     * 播一个本地文件。失败回 false，不抛。
+     *
+     * @param speed 语速百分数，100 = 原速。合成时烘不进去，全在这一层设。
+     * @param pitch 音调百分数，100 = 原调。有的机器上设不动，设不上就当原调。
+     */
+    fun play(id: String, path: String, speed: Int = 100, pitch: Int = 100): Boolean {
         stop()
         val mine = gen
         val p = MediaPlayer()
@@ -60,7 +65,19 @@ object Audition {
                 true
             }
             p.prepare()
+            /* 原速原调就一个字不碰播放器：设一遍等于让它走一次重采样，白添一层。 */
+            if (speed != 100 || pitch != 100) {
+                runCatching {
+                    val ps = p.playbackParams.setSpeed(speed.coerceIn(50, 300) / 100f)
+                    runCatching { ps.setPitch(pitch.coerceIn(50, 200) / 100f) }
+                    p.playbackParams = ps
+                }
+            }
             p.start()
+            if (speed != 100) {
+                // 有些机型必须在 start 之后再设一次才认。
+                runCatching { p.playbackParams = p.playbackParams.setSpeed(speed.coerceIn(50, 300) / 100f) }
+            }
             mp = p
             playingId = id
             true

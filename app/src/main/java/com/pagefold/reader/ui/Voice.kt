@@ -103,7 +103,7 @@ fun VoiceScreen(
     var custom by remember { mutableStateOf(app.box.custom()) }
     var msg by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
-    /* 克隆对话框。跟「新建」分开两个入口：新建是填一句话造一副嗓（小米独家，每次念书现场重生成）；克隆是拿一段录音复刻（做完锁死。 */
+    /* 克隆对话框的开关。新建是填一句描述造一副嗓，克隆是拿一段录音复刻。 */
     var cloning by remember { mutableStateOf(false) }
 
     var refresh by remember { mutableIntStateOf(0) }
@@ -121,8 +121,8 @@ fun VoiceScreen(
         onDispose { /* 试听不随页面销毁，见 Audition */ }
     }
 
-    val groups = remember(s.enginesJson, custom, refresh) {
-        Catalog.groups(s.engines, custom, emptyList())
+    val groups = remember(s.enginesJson, custom, refresh, com.pagefold.reader.voice.SysCache.rev) {
+        Catalog.groups(s.engines, custom)
     }
     val pool = remember(groups) { groups.flatMap { it.second } }
 
@@ -175,7 +175,7 @@ fun VoiceScreen(
                     val line = "这一段，念给你听。"
                     val mood = live?.mood?.ifBlank { s.style } ?: s.style
                     val read = Cue.of(line, null, null, mood, !s.cue)
-                    app.synth.make(s, v, line, read, one = live)
+                    app.synth.make(s, v, line, read, one = live, trial = true)
                 }
             }
             hearing = null
@@ -186,13 +186,16 @@ fun VoiceScreen(
                 return@launch
             }
             // 播没播上、播完没有，由 Audition 说了算；这里只报错。
-            if (!Audition.play(v.id, clip.file.absolutePath)) msg = "声音存下来了，播放器解不开这一段"
+            val mute = live ?: runCatching { app.vtune.of(v.id) }.getOrNull()
+            if (!Audition.play(
+                    v.id, clip.file.absolutePath,
+                    mute?.speed ?: 100, mute?.pitch ?: 100,
+                )
+            ) msg = "声音存下来了，播放器解不开这一段"
         }
     }
 
-    // 卡片翻页器放在页面这一层，不放列表项里。
-    // 放进 item 就跟着懒加载一起销毁 —— 你滑到下面点一行，上面那张卡根本不在组合里，
-    // 想翻也翻不动。提上来之后，列表滚到哪儿它都还醒着。
+    // 卡片翻页器放在页面这一层：放进列表项会随懒加载销毁，翻不动。
     val pager = rememberPagerState(
         initialPage = pool.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
     ) { pool.size }
@@ -618,7 +621,7 @@ private fun Dots(count: Int, at: Int, color: Color, dim: Color) {
     }
 }
 
-private fun openTtsSettings(ctx: Context): Boolean {
+internal fun openTtsSettings(ctx: Context): Boolean {
     val pm = ctx.packageManager
     val flag = Intent.FLAG_ACTIVITY_NEW_TASK
 
@@ -1293,6 +1296,37 @@ private fun Field(
     }
 }
 
+/** 一档一行：标题、当前值、一排可选档位。 */
+@Composable
+private fun StepRow(
+    label: String,
+    values: List<Int>,
+    value: Int,
+    text: (Int) -> String,
+    onPick: (Int) -> Unit,
+) {
+    val s = LocalSkin.current
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(label, fontSize = 14.sp, color = s.ink)
+            Spacer(Modifier.weight(1f))
+            Text(
+                text(value), fontSize = 20.sp, color = s.flame,
+                fontWeight = FontWeight.Medium, fontFamily = s.numFont
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            values.forEach { v ->
+                PickChip(text(v), v == value, { onPick(v) }, Modifier.padding(end = 6.dp))
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────
 // 判断这一副属于哪套协议、会发哪个模型
 // ─────────────────────────────────────────────────────────────
@@ -1377,18 +1411,17 @@ internal fun TuneRows(
         Card {
             Column(Modifier.padding(vertical = 2.dp)) {
                 if (has(com.pagefold.reader.field.Knob.SPEED)) {
-                    Ruler(
-                        "语速", draft.speed.toFloat(), 50f, 200f, 5f,
-                        { onChange(draft.copy(speed = it.roundToInt())) },
-                        low = "0.5×", high = "2.0×",
-                        format = { "%.2f×".format(it / 100f) }
+                    StepRow(
+                        "语速", com.pagefold.reader.field.Caps.SPEEDS, draft.speed,
+                        { com.pagefold.reader.field.Caps.speedText(it) },
+                        { onChange(draft.copy(speed = it)) },
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.PITCH)) {
-                    Ruler(
-                        "音调", draft.pitch.toFloat(), 50f, 200f, 5f,
-                        { onChange(draft.copy(pitch = it.roundToInt())) },
-                        unit = "%", low = "低", high = "高",
+                    StepRow(
+                        "音调", com.pagefold.reader.field.Caps.PITCHES, draft.pitch,
+                        { com.pagefold.reader.field.Caps.pitchText(it) },
+                        { onChange(draft.copy(pitch = it)) },
                     )
                 }
                 if (has(com.pagefold.reader.field.Knob.VOLUME)) {
@@ -1600,12 +1633,12 @@ private fun VoiceTuneSheet(
                 runCatching {
                     val mood = cur.mood.ifBlank { s.style }
                     val read = Cue.of(line, null, null, mood, !s.cue)
-                    app.synth.make(s, v, line, read, one = cur)
+                    app.synth.make(s, v, line, read, one = cur, trial = true)
                 }.getOrNull()
             }
             hearing = false
             if (clip == null) return@launch
-            Audition.play(v.id, clip.file.absolutePath)
+            Audition.play(v.id, clip.file.absolutePath, cur.speed, cur.pitch)
         }
     }
 

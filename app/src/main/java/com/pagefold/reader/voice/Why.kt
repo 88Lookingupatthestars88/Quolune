@@ -118,7 +118,7 @@ object Why {
                 if (line.isNotEmpty()) line else "当前选中的模型不能合成音频。"
             }
             has("不是语音模型") -> {
-                // 老存档、老异常里可能还带这一句
+                // 兼容旧的异常文本
                 val n2 = m.substringAfter('：', "").trim().ifBlank { name }
                 "「$n2」不是语音模型，不能用来合成音频。"
             }

@@ -107,7 +107,7 @@ object Lines {
             }
         }
         val got = readLines(ctx, bookId, name)
-        /* 顺手补一份索引。两件来由：一是旧书从来没建过；二是第一版的索引是坏的（偏移记的是字符下标，读出来一串 ��），读到就作废。 */
+        /* 顺手补一份索引。缺索引、或索引读不出来的，按 jsonl 重建。 */
         if (got.isNotEmpty()) runCatching { LineIndex.write(ctx, bookId, name, got) }
         return got
     }

@@ -187,6 +187,15 @@ private fun TuneScreen(
     var homeAsk by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
 
+    /* 「加一台本机引擎」：点了才去扫，扫回来按引擎分组列成一张纸。 */
+    var localAsk by remember { mutableStateOf(false) }
+    var localScan by remember { mutableStateOf(false) }
+    var localFound by remember {
+        mutableStateOf<List<com.pagefold.reader.voice.LocalEngine>>(emptyList())
+    }
+    /* 扫到了、但一副也念不出来的台数。纸上不指名。 */
+    var localMuted by remember { mutableIntStateOf(0) }
+
     /* 初值取上一回的账，切页回来第一帧就是真数，不会先画一排 0。 */
     var audioBytes by remember { mutableLongStateOf(Vault.audioBytes) }
     var audioCount by remember { mutableIntStateOf(Vault.audioCount) }
@@ -321,7 +330,61 @@ private fun TuneScreen(
             item {
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
                     Quiet {
-                        engines.forEachIndexed { i, e ->
+                        /* 本机那几台排在云端前面。 */
+                        val local = engines.filter { it.protocol == "system" }
+                        val cloud = engines.filter { it.protocol != "system" }
+
+                        local.forEachIndexed { i, e ->
+                            if (i > 0) Hair()
+                            VoiceBlock(
+                                e = e,
+                                note = noteOf(e),
+                                app = app,
+                                onToggle = { on ->
+                                    app.field.edit { st ->
+                                        st.withEngines(engines.map { if (it.id == e.id) it.copy(on = on) else it })
+                                    }
+                                },
+                                onEdit = { fixed ->
+                                    app.field.edit { st ->
+                                        st.withEngines(engines.map { if (it.id == fixed.id) fixed else it })
+                                    }
+                                },
+                                onDrop = {
+                                    app.field.edit { st ->
+                                        st.withEngines(engines.filterNot { it.id == e.id })
+                                    }
+                                    // 同一台引擎还有别的条在用它的话音表，那就留着。
+                                    if (engines.none { it.id != e.id && it.base == e.base }) {
+                                        com.pagefold.reader.voice.SysCache.forget(e.base)
+                                    }
+                                    msg = "已经拿掉了"
+                                },
+                            )
+                        }
+                        if (local.isNotEmpty()) Hair()
+                        AddRow("加一台本机引擎") {
+                            localAsk = true
+                            /* 这一趟已经扫过了，直接用那张表：再扫一遍要等几秒，挑的时候也白丢已勾的。 */
+                            if (localFound.isNotEmpty()) return@AddRow
+                            localScan = true
+                            scope.launch {
+                                val machines = withContext(Dispatchers.IO) {
+                                    runCatching { app.sys.engines() }.getOrDefault(emptyList())
+                                }
+                                val swept = runCatching { app.sys.sweep(machines) }.getOrNull()
+                                // 读回来的话音表收下：声源里那几条要靠它认语种。
+                                swept?.engines?.forEach {
+                                    com.pagefold.reader.voice.SysCache.memorize(it.pkg, it.voices)
+                                }
+                                localFound = swept?.engines.orEmpty()
+                                localMuted = swept?.muted ?: 0
+                                localScan = false
+                            }
+                        }
+                        Hair()
+
+                        cloud.forEachIndexed { i, e ->
                             if (i > 0) Hair()
                             VoiceBlock(
                                 e = e,
@@ -383,7 +446,29 @@ private fun TuneScreen(
                                         st.withChats(chats.map { if (it.id == fixed.id) fixed else it })
                                     }
                                 },
+                                onDrop = if (com.pagefold.reader.voice.ChatPresets.byId(c.id) != null) null else ({
+                                    app.field.edit { st ->
+                                        st.withChats(chats.filterNot { it.id == c.id })
+                                    }
+                                    msg = "已经拿掉了"
+                                }),
                             )
+                        }
+                        Hair()
+                        AddRow("加一家自己的接口") {
+                            app.field.edit { st ->
+                                st.withChats(
+                                    st.chats + com.pagefold.reader.voice.ChatCfg(
+                                        id = "u" + System.currentTimeMillis().toString(36),
+                                        name = "自己的接口",
+                                        base = "",
+                                        key = "",
+                                        model = "",
+                                        on = true,
+                                    )
+                                )
+                            }
+                            msg = "填上地址和钥匙就能用"
                         }
                         Hair()
                     }
@@ -651,7 +736,7 @@ private fun TuneScreen(
                 }
             }
 
-            /* 只有真崩过才出现的一节。崩了以后栈写在 files/last-crash.txt（合成线程的是 last-crash-player.txt。 */
+            /* 真崩过才有的一节。栈在 files/last-crash.txt，合成线程写的是 last-crash-player.txt。 */
             if (crashTxt.isNotBlank()) {
                 item { Chapter("上一回崩在这儿") }
                 item {
@@ -720,14 +805,56 @@ Choices("进应用先看哪一页", { homeAsk = false }, listOf(
 ))
 }
 
+if (localAsk) {
+    /* 已经在声源里的那几副不再列。 */
+    val taken = engines.filter { it.protocol == "system" }
+        .mapNotNull { it.voices?.trim()?.ifBlank { null } }.toSet()
+    LocalPick(
+        found = localFound,
+        muted = localMuted,
+        scanning = localScan,
+        taken = taken,
+        onClose = { localAsk = false },
+        onImport = { picks ->
+            localAsk = false
+            app.field.edit { st ->
+                st.withEngines(
+                    st.engines + picks.map { (eng, v) ->
+                        EngineCfg(
+                            id = Engines.sysId(eng.pkg, rawOf(v.param)),
+                            name = eng.label + " · " + v.name,
+                            kind = "SYSTEM",
+                            base = eng.pkg,
+                            proto = "system",
+                            voices = v.param,
+                            on = true,
+                        )
+                    }
+                )
+            }
+            msg = "加进来 ${picks.size} 副"
+        },
+    )
+}
+
 msg?.let { Toast(it) { msg = null } }
 }
 }
 
 private fun noteOf(e: EngineCfg): String {
-if (!e.on) return "关"
-// 缺哪一格就说哪一格。四格都齐了才报「几个音色」。
-Engines.blocked(e)?.let { return it }
+    if (!e.on) return "关"
+    /* 读到几副报几副；还在读就报「正在读」。 */
+    if (e.protocol == "system") {
+        val n = com.pagefold.reader.voice.SysCache.count(e.base)
+        if (n < 0) return "正在读它的话音"
+        if (n == 0) return "这台没装话音"
+        /* 一副话音一条。这一条配的那副话不在了，多半是引擎那边删掉了。 */
+        val v = com.pagefold.reader.voice.SysCache.of(e.base)
+            .firstOrNull { it.param == (e.voices ?: "").trim() }
+        return v?.desc?.ifBlank { "本机" } ?: "这副话音不在了"
+    }
+    // 缺哪一格就说哪一格。四格都齐了才报「几个音色」。
+    Engines.blocked(e)?.let { return it }
 // 名字一眼就不是语音模型（小米那套口收到不认识的 model 不报错，会静默降级），
 // 在卡片上先说一句，省得他点开播放才发现。
 if (Why.notSpeech(e.modelOr(), e.protocol)) return "模型不能念"
@@ -1097,6 +1224,20 @@ private fun Sample(s: Settings) {
 // 嗓子
 // ─────────────────────────────────────────────────────────────
 
+/** 一张表底下那一行「再加一条」。 */
+@Composable
+private fun AddRow(text: String, onClick: () -> Unit) {
+    val s = LocalSkin.current
+    Row(
+        Modifier.fillMaxWidth().tap { onClick() }.padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("＋", fontSize = 14.sp, color = s.flame)
+        Spacer(Modifier.width(9.dp))
+        Text(text, fontSize = 13.sp, color = s.flame)
+    }
+}
+
 @Composable
 private fun EngineMark(name: String, on: Boolean) {
     val s = LocalSkin.current
@@ -1124,7 +1265,7 @@ private fun VoiceBlock(
 ) {
     val s = LocalSkin.current
     var name by remember(e.id) { mutableStateOf(e.name) }
-    // 老存档里这几个字段可能是 Gson 塞进来的 null，先兜平，别让输入框拿着 null 用。
+    // 这三个字段可能是 Gson 塞进来的 null，输入框不收 null。
     var base by remember(e.id) { mutableStateOf(e.base ?: "") }
     var key by remember(e.id) { mutableStateOf(e.key ?: "") }
     var model by remember(e.id) { mutableStateOf(e.model ?: "") }
@@ -1148,9 +1289,11 @@ private fun VoiceBlock(
         val m = (e.model ?: "").trim()
         val k = (e.key ?: "").trim()
         if (k.isBlank()) return@LaunchedEffect
-        // 本地能判的三样，先判掉，一个请求都不发。
-        if (m.isBlank()) { verdict = "模型空着，念不了"; return@LaunchedEffect }
-        if (Why.notSpeech(m, e.protocol)) { verdict = "识别模型，念不了"; return@LaunchedEffect }
+        // 本地能判的三样，先判掉，一个请求都不发。DeepSeek 没有模型这一格。
+        if (e.protocol != "deepseek") {
+            if (m.isBlank()) { verdict = "模型空着，念不了"; return@LaunchedEffect }
+            if (Why.notSpeech(m, e.protocol)) { verdict = "识别模型，念不了"; return@LaunchedEffect }
+        }
         verdict = Speak.probeRemembered(e.protocol, e.base ?: "", k, m)
     }
 
@@ -1159,12 +1302,17 @@ private fun VoiceBlock(
         val m = (e.model ?: "").trim()
         val k = (e.key ?: "").trim()
         if (trying) return
-        if (k.isBlank() || m.isBlank()) return
+        if (k.isBlank()) return
+        if (e.protocol != "deepseek" && m.isBlank()) return
         vScope.launch {
             trying = true
             verdict = "正在测试中"
-            val why = when {
-                e.protocol == "mimo" -> Speak.probeMimo(e.base ?: "", k, m)
+            val why = when (e.protocol) {
+                "mimo" -> Speak.probeMimo(e.base ?: "", k, m)
+                "deepseek" -> com.pagefold.reader.voice.Deepseek.probe(
+                    e.base ?: "", k,
+                    e.voiceList().firstOrNull().orEmpty()
+                )
                 else -> Speak.probe(
                     e.base ?: "", k, m,
                     com.pagefold.reader.field.Presets.voicesFor(e.base ?: "", e.protocol).firstOrNull().orEmpty()
@@ -1179,6 +1327,8 @@ private fun VoiceBlock(
     LaunchedEffect(e.id, e.key, e.base, e.proto, e.on) {
         val k = e.key ?: ""
         if (k.isBlank() || !e.on) { fetched = emptyList(); return@LaunchedEffect }
+        /* 这家的清单里没有能念的东西，不问。 */
+        if (e.protocol == "deepseek") { fetched = emptyList(); return@LaunchedEffect }
         // 盘上有就先用盘上的，界面立刻有东西；没有才去要一次，要回来也落盘。
         val cached = Speak.modelsCached(e.base ?: "", k, e.protocol)
         if (cached.isNotEmpty()) fetched = cached
@@ -1236,6 +1386,7 @@ private fun VoiceBlock(
         }
 
         if (!e.on) return@Column
+        /* 本机那一条只有开关和名字：话音在加的时候挑过了。 */
         if (e.protocol == "system") return@Column
 
         Spacer(Modifier.height(4.dp))
@@ -1269,6 +1420,8 @@ private fun VoiceBlock(
 
             InlineField("克隆模型", clone, { clone = it; push() }, "")
             Chips(fetched.filter { it.contains("clone") }, clone) { clone = it; push() }
+        } else if (e.protocol == "deepseek") {
+            /* 这家没有模型这一格：地址后面直接挂音色名，音色在音色页挑。 */
         } else {
             /* 能复刻的那几家（硅基、MiniMax）也分两格。 */
             /* 朗读模型：清单里那些「一定不念书」的不摆出来。 */
@@ -1327,7 +1480,7 @@ private object ChatMemo {
 
     fun get(k: String): List<String>? = mem[k]
 
-    /** 这一对「地址 + 钥匙」问过没有。问过就不再问第二遍。 */
+    /** 这一对「地址 + 钥匙」问过没有。 */
     fun knows(k: String): Boolean = mem.containsKey(k)
 
     fun put(k: String, v: List<String>) {
@@ -1343,6 +1496,7 @@ private fun ChatBlock(
     app: App,
     onToggle: (Boolean) -> Unit,
     onEdit: (com.pagefold.reader.voice.ChatCfg) -> Unit,
+    onDrop: (() -> Unit)? = null,
 ) {
     val s = LocalSkin.current
     var name by remember(e.id) { mutableStateOf(e.name) }
@@ -1461,6 +1615,17 @@ private fun ChatBlock(
                         }
                         .padding(horizontal = 9.dp, vertical = 5.dp)
                 )
+            }
+            if (onDrop != null) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    Modifier.size(30.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .tap { onDrop() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("×", fontSize = 17.sp, color = s.inkFaint)
+                }
             }
             Spacer(Modifier.width(4.dp))
             Pill(e.on, onToggle)
@@ -1730,7 +1895,7 @@ internal fun NavLine(title: String, sub: String, onClick: () -> Unit) {
 @Composable
 private fun AiVoicePick(s: Settings, app: App, say: (String) -> Unit) {
     val skin = LocalSkin.current
-    val all = remember(s.enginesJson, app.box.custom().size) {
+    val all = remember(s.enginesJson, app.box.custom().size, com.pagefold.reader.voice.SysCache.rev) {
         runCatching { Catalog.ours(s.engines, app.box.custom()).map { it.name }.distinct() }
             .getOrDefault(emptyList())
     }
@@ -1953,6 +2118,130 @@ internal fun Bare(text: String) {
         letterSpacing = 1.5.sp,
         modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
     )
+}
+
+/** 本机话音的 param 形如 `包名|话音名|语种`，中间那一段就是引擎自己认的名字。 */
+private fun rawOf(param: String): String = param.split('|').getOrElse(1) { param }
+
+/**
+ * 「机器上有什么话音」那张纸：按引擎分组，一副话音一行，勾几副加几副。
+ *
+ * @param taken 已经在声源里的那几副，不再列
+ */
+@Composable
+private fun LocalPick(
+    found: List<com.pagefold.reader.voice.LocalEngine>,
+    muted: Int,
+    scanning: Boolean,
+    taken: Set<String>,
+    onClose: () -> Unit,
+    onImport: (List<Pair<com.pagefold.reader.voice.LocalEngine, com.pagefold.reader.voice.Voice>>) -> Unit,
+) {
+    val s = LocalSkin.current
+    var picked by remember(found) { mutableStateOf<Set<String>>(emptySet()) }
+    val groups = remember(found, taken) {
+        found.map { e -> e to e.voices.filter { it.param !in taken } }
+            .filter { it.second.isNotEmpty() }
+    }
+    val title = when {
+        scanning -> "正在读机器上的朗读引擎"
+        found.isNotEmpty() && groups.isNotEmpty() -> "机器上的话音"
+        found.isNotEmpty() -> "机器上的都加过了"
+        muted > 0 -> "没找到能出声的引擎"
+        else -> "没找到朗读引擎"
+    }
+    val hint = when {
+        scanning -> "一台一台试念一句，慢几秒"
+        found.isNotEmpty() && groups.isNotEmpty() -> null
+        found.isNotEmpty() -> "装了新的朗读引擎再回来，这里会重新找"
+        muted > 0 -> "装的那几台念不出声，去它们自己的设置里把语音包下下来"
+        else -> "先在手机里装一个朗读引擎"
+    }
+
+    Overlay(onClose) {
+        Column(
+            Modifier.padding(vertical = 18.dp)
+                .heightIn(max = 520.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    title, fontSize = 16.sp, color = s.ink,
+                    fontWeight = FontWeight.SemiBold, fontFamily = s.titleFont
+                )
+                Spacer(Modifier.weight(1f))
+                IconBtn(Icons.Default.Close, "收起", onClose, size = 32.dp)
+            }
+            Spacer(Modifier.height(6.dp))
+            if (hint != null) {
+                Text(
+                    hint, fontSize = 12.sp, color = s.inkDim, lineHeight = 19.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+                )
+            } else {
+                groups.forEach { (eng, list) ->
+                    Text(
+                        eng.label, fontSize = 10.sp, color = s.inkFaint,
+                        letterSpacing = 1.5.sp,
+                        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 2.dp)
+                    )
+                    list.forEach { v ->
+                        val on = v.param in picked
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .tap {
+                                    picked = if (on) picked - v.param else picked + v.param
+                                }
+                                .padding(horizontal = 20.dp, vertical = 11.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier.size(18.dp).clip(RoundedCornerShape(5.dp))
+                                    .background(if (on) s.flame.copy(alpha = 0.14f) else s.panelSink)
+                                    .border(1.dp, if (on) s.flame else s.hair, RoundedCornerShape(5.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (on) Text("✓", fontSize = 11.sp, color = s.flame)
+                            }
+                            Spacer(Modifier.width(11.dp))
+                            Text(
+                                v.name, fontSize = 14.sp,
+                                color = if (on) s.ink else s.inkDim,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (v.desc.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    v.desc, fontSize = 10.sp, color = s.inkFaint,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                    Btn(
+                        if (picked.isEmpty()) "挑一副" else "导入选中的 ${picked.size} 副",
+                        {
+                            onImport(
+                                groups.flatMap { (eng, list) ->
+                                    list.filter { it.param in picked }.map { eng to it }
+                                }
+                            )
+                        },
+                        BtnKind.PRIMARY,
+                        Modifier.weight(1f),
+                        enabled = picked.isNotEmpty(),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -589,7 +589,7 @@ data class CastProfile(
     val ban: Ban? = null,
 )
 
-/** 分角色引擎。处理顺序：段落 → 切成「旁白 / 对白」交替片段 → 每句对白找说话人 → 找不到就交替推断 → 再不行用默认音色比「只看引。 */
+/** 分角色引擎。段落切成「旁白 / 对白」交替片段，再逐句定说话人，定不下来按对话交替推。 */
 object Cast {
 
     private val QUOTE_PAIRS = listOf(
@@ -711,7 +711,7 @@ object Cast {
                     }
                     continue
                 }
-                /* 引号里是拟声（「噗嗤！ */
+                /* 引号里是拟声或纯标点，按旁白念。 */
                 if (Lines.isNoise(body) || allPunct(body)) {
                     var kept = false
                     cut(para, seg.from, seg.to, chunk) { a, b2 ->
@@ -949,7 +949,7 @@ object Cast {
 
     // ─────────── 内置模板 ───────────
 
-    /** 通用中文网文模板。覆盖：说道 / 道 / 笑道 / 冷声道 / 沉声 / 怒道 / 低声 / 开口 / 问 / 答 / 喝道 …名字用「2。 */
+    /** 通用中文网文模板：名字在引号前、引号后两种写法，名字取 2–4 个汉字，另带一条称呼。 */
     val TEMPLATE: String = """
 # 一行一条：谁 | 嗓音 | 正则 [| 后]
 # 正则里带竖线没问题，只切前两刀。

@@ -50,8 +50,8 @@ import com.pagefold.reader.kit.Sz
 import com.pagefold.reader.kit.tap
 import kotlinx.coroutines.launch
 
-/** 已同意的条款版本。条款改到要重新征求同意时，把这个数加一。 */
-const val CONSENT_REV = 2
+/** 已同意的条款版本。条款改到要重新征求同意时，换成一个大于此前所有值的数。 */
+const val CONSENT_REV = 1
 
 /**
  * 首次进入，或条款改版后第一次进来，先看这一屏。

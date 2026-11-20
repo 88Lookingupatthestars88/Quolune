@@ -37,7 +37,7 @@ object Bailian {
         if (text.isBlank()) throw IOException("这一段是空的")
 
         /* 这家单次上限 600 字符，是硬上限，超了直接 400。 */
-        val pieces = split(text, MAX_CHARS)
+        val pieces = Wav.split(text, MAX_CHARS)
         if (pieces.size <= 1) return@withContext one(base, key, model, text, voice, lang)
 
         val parts = ArrayList<ByteArray>(pieces.size)
@@ -46,88 +46,8 @@ object Bailian {
             // 而且这一段本来就是要拼起来的，早一秒晚一秒没有区别。
             parts.add(one(base, key, model, piece, voice, lang))
         }
-        return@withContext join(parts)
+        return@withContext Wav.join(parts)
     }
-
-    /** 按句切成每段不超过 [max] 字。 */
-    private fun split(text: String, max: Int): List<String> {
-        val s = text.trim()
-        if (s.length <= max) return listOf(s)
-        val out = ArrayList<String>(4)
-        var from = 0
-        while (from < s.length) {
-            val room = s.length - from
-            if (room <= max) { out.add(s.substring(from)); break }
-            val end = from + max
-            val floor = from + max / 3
-            var cut = -1
-            for (i in end downTo floor) {
-                if (s[i - 1] in "。！？；…!?;") { cut = i; break }
-            }
-            if (cut < 0) {
-                for (i in end downTo floor) {
-                    if (s[i - 1] in "，、,：: ") { cut = i; break }
-                }
-            }
-            if (cut < 0) cut = end
-            out.add(s.substring(from, cut))
-            from = cut
-        }
-        return out
-    }
-
-    /** 几段音频拼成一条。这家回来的是 wav（地址后缀 .wav）。 */
-    private fun join(parts: List<ByteArray>): ByteArray {
-        if (parts.size == 1) return parts[0]
-        if (parts.any { it.size < 44 || it[0] != 'R'.code.toByte() }) {
-            val out = java.io.ByteArrayOutputStream()
-            parts.forEach { out.write(it) }
-            return out.toByteArray()
-        }
-        val fmt = fmtChunk(parts[0]) ?: run {
-            val out = java.io.ByteArrayOutputStream()
-            parts.forEach { out.write(it) }
-            return out.toByteArray()
-        }
-        val body = java.io.ByteArrayOutputStream()
-        parts.forEach { p -> dataChunk(p)?.let { body.write(it) } }
-        val data = body.toByteArray()
-        if (data.isEmpty()) return parts[0]
-
-        // 44 = RIFF 头 12 + fmt 块 8+16 + data 头 8
-        val total = 36 + fmt.size + 8 + data.size
-        val head = java.io.ByteArrayOutputStream(fmt.size + 44)
-        fun le32(v: Int) {
-            head.write(v and 0xFF); head.write((v ushr 8) and 0xFF)
-            head.write((v ushr 16) and 0xFF); head.write((v ushr 24) and 0xFF)
-        }
-        fun le16(v: Int) { head.write(v and 0xFF); head.write((v ushr 8) and 0xFF) }
-        head.write("RIFF".toByteArray(Charsets.US_ASCII)); le32(total)
-        head.write("WAVE".toByteArray(Charsets.US_ASCII))
-        head.write("fmt ".toByteArray(Charsets.US_ASCII)); le32(fmt.size); head.write(fmt)
-        head.write("data".toByteArray(Charsets.US_ASCII)); le32(data.size)
-        val out = java.io.ByteArrayOutputStream(head.size() + data.size)
-        out.write(head.toByteArray()); out.write(data)
-        return out.toByteArray()
-    }
-
-    private fun chunk(b: ByteArray, want: String): ByteArray? {
-        var i = 12
-        var guard = 0
-        while (i + 8 <= b.size && guard++ < 64) {
-            val id = String(b, i, 4, Charsets.US_ASCII)
-            val size = (b[i + 4].toInt() and 0xFF) or ((b[i + 5].toInt() and 0xFF) shl 8) or
-                ((b[i + 6].toInt() and 0xFF) shl 16) or ((b[i + 7].toInt() and 0xFF) shl 24)
-            if (size < 0 || i + 8 + size > b.size) return null
-            if (id == want) return b.copyOfRange(i + 8, i + 8 + size)
-            i += 8 + size + (size and 1)
-        }
-        return null
-    }
-
-    private fun fmtChunk(b: ByteArray): ByteArray? = chunk(b, "fmt ")
-
-    private fun dataChunk(b: ByteArray): ByteArray? = chunk(b, "data")
 
     /** 一段：真的发一次请求。 */
     private fun one(

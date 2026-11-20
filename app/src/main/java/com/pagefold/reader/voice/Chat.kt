@@ -127,7 +127,7 @@ object Chats {
     /** 出厂那一排。地址已经填好，缺的只有钥匙。 */
     val DEFAULT: List<ChatCfg> = ChatPresets.fresh()
 
-    /** 读存档里的那串。老存档里没有这一格（空串），直接给出厂表 —— 不必写迁移。 */
+    /** 读存档里的那串。空串给出厂表。 */
     fun decode(raw: String?): List<ChatCfg> {
         if (raw.isNullOrBlank()) return DEFAULT
         val t = object : TypeToken<List<ChatCfg>>() {}.type

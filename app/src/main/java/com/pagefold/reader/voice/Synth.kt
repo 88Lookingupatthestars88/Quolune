@@ -46,7 +46,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     /** 账本读不出来的那一次。读不出来和「本来就没有」必须分开：前者一旦被当成空账本写回去，所有条目的原文就永久没了 —— 音频还在，字没了。 */
     private var ledgerBroken = false
 
-    /** 合成规则的版本。改了「怎么合成」就抬一格：缓存 key 全部换掉，旧音频一并清。 */
+    /**
+     * 合成规则的版本。
+     *
+     * 抬一格会清空 clips 目录与账本 —— 只有「同一个 key 会产出不一样的声音」才抬。
+     * 改参数（语速、音调、模型）不用抬：那些都进 key，旧条目自然不再命中。
+     */
     private val CLIP_REV = 3
 
     /** 把 rev 抬格前的音频清一次。 */
@@ -112,7 +117,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         cfg = s
     }
 
-    /** 这一段交给哪副嗓源。顺序：先拿音色的 engine 当嗓源 id 找（一家一套音色名。 */
+    /** 这一段走哪副嗓源：先按音色的 engine 找嗓源 id，再按嗓源类型找，最后取第一路开着的。 */
     private fun route(s: Settings, v: Voice): EngineCfg? {
         s.engines.firstOrNull { it.id == v.engine }?.let { return it }
         val src = runCatching { VoiceSource.valueOf(v.engine.uppercase()) }.getOrNull()
@@ -127,22 +132,30 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             else -> "mimo"
         }
 
-    /** 不同音色、不同段落判定必须分开，否则换了嗓音/换了调子还在放旧音频。 */
-    private fun fingerprint(s: Settings, v: Voice, r: Reading?, rate: Int): String = buildString {
+    /**
+     * 不同音色、不同段落判定必须分开，否则换了嗓音/换了调子还在放旧音频。
+     *
+     * 语速和音调不进指纹 —— 它们由播放器设，同一段音频能按任何速度放。
+     * [bakeSpeed] / [bakePitch] 是烘进声音里的那一份（对外当朗读引擎时才有），它得进。
+     */
+    private fun fingerprint(
+        s: Settings,
+        v: Voice,
+        r: Reading?,
+        bakeSpeed: Int,
+        bakePitch: Int,
+    ): String = buildString {
         append(v.engine).append('/').append(v.kind).append('/').append(v.param)
         // 模型进指纹，换模型要另起一条缓存。
         append('/').append(route(s, v)?.modelOr().orEmpty())
-        append('/').append(s.speed).append('/').append(s.pitch)
+        append("/b=").append(bakeSpeed).append(',').append(bakePitch)
         val vt = tunes?.of(v.id) ?: com.pagefold.reader.field.Vt()
         if (tunes?.has(v.id) == true) {
-            append("/v=").append(vt.speed).append(',').append(vt.pitch)
-            append(',').append(vt.volume).append(',').append(vt.mood).append(',').append(vt.lang)
+            append("/v=").append(vt.volume).append(',').append(vt.mood).append(',').append(vt.lang)
             append(',').append(vt.bright).append(',').append(vt.soft).append(',').append(vt.clear)
             append(',').append(vt.fx).append(',').append(vt.dialect).append(',').append(vt.silence)
             append(',').append(vt.temp).append(',').append(vt.boost).append(',').append(vt.norm)
         }
-        // 这一本的念速也要进指纹：倍速是烘进音频里的，不进指纹就会放到旧速度那条。
-        append('/').append(rate.coerceIn(50, 300))
         if (r != null) {
             append('/').append(r.kind.name).append(',').append(r.rate)
             append(',').append(r.pitch).append(',').append(r.volume)
@@ -156,11 +169,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         v: Voice,
         text: String,
         r: Reading?,
-        rate: Int = 100,
+        bakeSpeed: Int = 100,
+        bakePitch: Int = 100,
         extra: String = "",
     ): String {
         /* rev 进 key：合成规则一变，旧音频不再被复用。 */
-        val raw = fingerprint(s, v, r, rate) + "|" + text + "|r=$CLIP_REV|" + extra
+        val raw = fingerprint(s, v, r, bakeSpeed, bakePitch) + "|" + text + "|r=$CLIP_REV|" + extra
         val md = MessageDigest.getInstance("MD5").digest(raw.toByteArray())
         return md.joinToString("") { "%02x".format(it) }
     }
@@ -205,25 +219,30 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             val id = String(b, i, 4, Charsets.US_ASCII)
             val size = (b[i + 4].toInt() and 0xFF) or ((b[i + 5].toInt() and 0xFF) shl 8) or
                 ((b[i + 6].toInt() and 0xFF) shl 16) or ((b[i + 7].toInt() and 0xFF) shl 24)
-            if (size < 0) return false
+            /* data 的长短写在头里，边合成边回的服务写的时候还不知道有多长，填的是占位。 */
             if (id == "data") { at = i + 8; len = size; break }
+            if (size < 0) return false
             i += 8 + size + (size and 1)
         }
-        if (at < 0 || len <= 0) return false
-        // 声明比实际长 = 写断了。实际比声明长出太多 = 后面被塞了别的东西。
-        val claim = at.toLong() + len
-        if (claim > n) return false
-        if (n - claim > 32L * 1024) return false
+        if (at < 0) return false
+        // 没长度可用时（占位 0、负数、比文件还长），按文件余下来的算。
+        val claim = at.toLong() + maxOf(0, len)
+        val real = if (len <= 0 || claim > n) n - at else len.toLong()
+        if (real <= 256L) return false
+        // 声称的长度与实际对得上时，多出来的尾巴不能太长 —— 那是后面被塞了别的东西。
+        if (len > 0 && claim <= n && n - claim > 32L * 1024) return false
         return true
     }
 
     /** 把一段字节落成缓存文件。六个服务分支都走这里，别处不要再自己拼临时文件名。 */
     private fun land(k: String, ext: String, bytes: ByteArray): File {
-        if (bytes.size < 512) throw java.io.IOException("只回了 ${bytes.size} 字节，不像一段声音")
+        /* wav 的头补齐：边合成边回的那几家，data 长度是占位，播放器按它解析会判坏。 */
+        val body = if (ext == "wav") Wav.fix(bytes) else bytes
+        if (body.size < 512) throw java.io.IOException("只回了 ${body.size} 字节，不像一段声音")
         val dst = File(cacheDir, "$k.$ext")
         val tmp = File(cacheDir, "$k." + System.nanoTime().toString(36) + ".part")
         try {
-            tmp.writeBytes(bytes)
+            tmp.writeBytes(body)
             if (!tmp.renameTo(dst)) {
                 tmp.copyTo(dst, true)
                 tmp.delete()
@@ -253,27 +272,26 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         r: Reading?,
         before: String? = null,
         after: String? = null,
-        rate: Int = 100,
         force: Boolean = false,
         /* 一次性的调法。试听传这个：听到的是手上还没存的数，不是上一次存下的。 */
         one: com.pagefold.reader.field.Vt? = null,
+        /* 把快慢烘进声音里，给「Quolune 当手机朗读引擎」那条路用。播放时由播放器设，不烘。 */
+        bakeSpeed: Int = 100,
+        bakePitch: Int = 100,
+        /* 这一段是试听，不属于书中正文。账本按它分两本。 */
+        trial: Boolean = false,
     ): Clip {
         sync(s)
-        val k = key(s, v, text, r, rate, one?.let { "u=${it.speed},${it.pitch},${it.volume},${it.mood},${it.temp}" }.orEmpty())
+        val k = key(s, v, text, r, bakeSpeed, bakePitch,
+            one?.let { "u=${it.volume},${it.mood},${it.temp}" }.orEmpty())
         /* force = 试听时用：绕开缓存，逼它真去问一次。 */
         if (!force) cached(k)?.let { return it }
 
-        /* 倍速要烘进音频里，不能只靠播放器。 */
-        /* 这一副音色自己调过快慢、音调、音量没有。 */
+        /* 语速音调不进合成：播放器放的时候设，换速度不必重念。 */
         val mine = one ?: tunes?.let { t -> if (t.has(v.id)) t.of(v.id) else null }
-        val own = mine ?: com.pagefold.reader.field.Vt(
-            speed = s.speed,
-            pitch = s.pitch,
-            volume = 100,
-            mood = "",
-        )
-        val sp = ((own.speed.toLong() * rate.coerceIn(50, 300)) / 100L).toInt().coerceIn(50, 250)
-        val pitchPct = own.pitch.coerceIn(50, 200)
+        val own = mine ?: com.pagefold.reader.field.Vt(volume = 100, mood = "")
+        val sp = bakeSpeed.coerceIn(50, 300)
+        val pitchPct = bakePitch.coerceIn(50, 200)
         val volPct = own.volume.coerceIn(50, 200)
 
         val ext: String
@@ -310,7 +328,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
             }
             "minimax" -> {
                 // MiniMax：自己的口，音频回来是十六进制。
@@ -336,7 +354,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
             }
             "bailian" -> {
                 // 阿里百炼：JSON 里给一个音频地址，要再下一次。
@@ -353,17 +371,32 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
             }
             "system" -> {
                 /* 系统 TTS 自己往文件里写，不经过我们那层「先写临时名再改名」，所以它写的时候，另一路读到这里会看到一个只写了一半的 wav。 */
                 val tmp = File(cacheDir, "$k." + System.nanoTime().toString(36) + ".part.wav")
-                sys.file(text, v.param.ifBlank { s.sysVoice }, sp, pitchPct, tmp)
+                /* param 空会落回系统默认引擎；默认引擎若是本应用自己，就成了环。这一格不许空。 */
+                val target = v.param.ifBlank { s.sysVoice }
+                sys.file(text, target, sp, pitchPct, tmp)
                 val dst = File(cacheDir, "$k.wav")
                 if (!tmp.renameTo(dst)) { tmp.copyTo(dst, true); tmp.delete() }
                 file = dst
                 ext = "wav"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
+            }
+            "deepseek" -> {
+                // DeepSeek：自己的口，回来是 24 kHz 单声道 wav。没有语速这一格，快慢交给播放器。
+                val e = route(s, v) ?: throw java.io.IOException("这副嗓源不在了，去定音里重新挑一副")
+                val bytes = Deepseek.wav(
+                    base = e.base ?: "",
+                    key = e.key ?: "",
+                    text = text,
+                    voice = v.param.ifBlank { v.name },
+                )
+                file = land(k, "wav", bytes)
+                ext = "wav"
+                note(k, text, v.name, ext, trial)
             }
             "speech" -> {
                 // 标准口：POST /v1/audio/speech，直接回音频。
@@ -387,7 +420,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
             }
             else -> {
                 // MiMo：音频在 chat/completions 的 message.audio 里
@@ -405,7 +438,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "wav", bytes)
                 ext = "wav"
-                note(k, text, v.name, ext)
+                note(k, text, v.name, ext, trial)
             }
         }
         return Clip(file, ext)
@@ -538,10 +571,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         ledgerWrite(safe)
     }
 
-    /** 试听那一句。音色页点「听一下」、复刻页点「听听像不像」，念的都是这一句 ——它跟着账本一起存，所以能认出来：这些不是书里的字，是点出来的响。 */
-    private val trialLine = "这一段，念给你听。"
-
-    private fun note(key: String, text: String, voice: String, ext: String) {
+    /** 记一段念过的。 */
+    private fun note(key: String, text: String, voice: String, ext: String, trial: Boolean) {
         val list = ledgerLoad()
         list.removeAll { it.key == key }
         list.add(
@@ -552,7 +583,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 voice = voice,
                 at = System.currentTimeMillis(),
                 ext = ext,
-                trial = text.trim() == trialLine,
+                trial = trial,
             )
         )
         /* 账本不截断。只留最后 400 行的话，盘上有一千五百段，页面上只列得出四百段，剩下那一千多段看不见也就删不掉。 */

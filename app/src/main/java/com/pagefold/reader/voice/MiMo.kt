@@ -134,8 +134,6 @@ class MiMo(
             if (temperature != null) append(",\"temperature\":").append(temperature)
             append("}")
         }
-        note4check(chosen, voice, said, text, payload)
-
         val b = Request.Builder()
             .url(base.trimEnd('/') + "/v1/chat/completions")
             .header("api-key", Auth.head(key))
@@ -162,26 +160,6 @@ class MiMo(
                 ?.getAsJsonObject("audio")?.get("data")?.asString
                 ?: throw IOException("没有音频：$chosen")
             Base64.decode(b64, Base64.DEFAULT)
-        }
-    }
-
-    /** 把这一次真正发出去的东西留在 files/last-tts.txt。 */
-    private fun note4check(model: String, voice: Voice, said: String, text: String, payload: String) {
-        runCatching {
-            val ctx = appCtx ?: return
-            val f = java.io.File(ctx.filesDir, "last-tts.txt")
-            f.writeText(
-                buildString {
-                    append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-                        .format(java.util.Date()))
-                    append("\nmodel=").append(model)
-                    append("\nvoice=").append(voice.param)
-                    append("\nkind=").append(voice.kind)
-                    append("\ninstruction=").append(said.ifEmpty { "(未发送)" })
-                    append("\ntext=").append(text)
-                    append("\npayload=").append(payload)
-                }
-            )
         }
     }
 

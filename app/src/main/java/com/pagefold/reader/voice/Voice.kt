@@ -133,19 +133,18 @@ object Catalog {
 
     fun all(custom: List<Voice>): List<Voice> = MIMO + custom
 
-    /**
-* 现在真正能用的那些音色。
-*
-* @param sys 本机语音包（调用方自己读好了传进来；系统 TTS 那条路上传空，避免自己调自己）
-*/
+    /** 现在真正能用的那些音色，含本机朗读引擎的话音。 */
     fun ours(
         engines: List<com.pagefold.reader.field.EngineCfg>,
         custom: List<Voice>,
-        sys: List<Voice> = emptyList(),
     ): List<Voice> {
         val on = engines.filter { it.on }.map { it.src }.toSet()
         if (on.isEmpty()) return emptyList()
         val out = ArrayList<Voice>(24)
+        if (com.pagefold.reader.field.VoiceSource.SYSTEM in on) {
+            engines.filter { it.on && it.protocol == "system" }
+                .forEach { e -> out += local(e) }
+        }
         if (com.pagefold.reader.field.VoiceSource.MIMO in on) {
             out += MIMO.filter { it.engine == "mimo" }
             out += custom.filter { it.engine == "mimo" }
@@ -159,26 +158,24 @@ object Catalog {
         if (com.pagefold.reader.field.VoiceSource.OPENAI in on) {
             out += custom.filter { it.engine != "mimo" && it.engine != "system" }
         }
-        if (com.pagefold.reader.field.VoiceSource.SYSTEM in on) out += sys
         return out
     }
 
-    /** 按嗓子分组，给界面用。没开的不出现。 */
+    /** 按嗓子分组，给界面用。念不出声的不出现。 */
     fun groups(
         engines: List<com.pagefold.reader.field.EngineCfg>,
         custom: List<Voice>,
-        sys: List<Voice> = emptyList(),
     ): List<Pair<String, List<Voice>>> {
-        /* 模型空着的一副不列音色。音色挂在这副嗓源上，模型没填，点了也念不出来。 */
+        /* 模型空着的一副不列音色。判据只留一处，见 [Engines.voicable]。 */
         val on = engines.filter {
-            it.on && (it.protocol == "system" || (it.model ?: "").isNotBlank())
+            it.on && com.pagefold.reader.field.Engines.voicable(it)
         }
         if (on.isEmpty()) return emptyList()
         return on.map { e ->
             val mine = when (e.src) {
                 com.pagefold.reader.field.VoiceSource.MIMO ->
                     MIMO.filter { it.engine == "mimo" } + custom.filter { it.engine == "mimo" }
-                com.pagefold.reader.field.VoiceSource.SYSTEM -> sys
+                com.pagefold.reader.field.VoiceSource.SYSTEM -> local(e)
                 com.pagefold.reader.field.VoiceSource.OPENAI ->
                     custom.filter { it.engine != "mimo" && it.engine != "system" }
             }
@@ -188,6 +185,19 @@ object Catalog {
             } else mine
             e.name to mine2
         }.filter { it.second.isNotEmpty() }
+    }
+
+    /**
+     * 本机嗓源底下配的那一副话音，挂在这条嗓源的 id 上。
+     *
+     * 话音表是按包名缓存的（[SysCache]），这里把它认到具体那一条上。
+     */
+    private fun local(e: com.pagefold.reader.field.EngineCfg): List<Voice> {
+        val all = SysCache.of(e.base)
+        val want = (e.voices ?: "").trim()
+        if (want.isBlank()) return all
+        val hit = all.firstOrNull { it.param == want } ?: return emptyList()
+        return listOf(hit.copy(id = e.id, engine = e.id))
     }
 
     /** 一副「标准口」音色：名字就是一个词，直接当 voice 发出去。 */
@@ -216,6 +226,9 @@ object Catalog {
 
     /** 官方音色表上写着的中文名。只有查得到的才写，查不到的显示原名。 */
     private val NICE = mapOf(
+        /* DeepSeek 官方给的那两个名字。 */
+        "stella" to "海星",
+        "tide" to "暗潮",
         "alex" to "沉稳男声",
         "benjamin" to "低沉男声",
         "charles" to "磁性男声",

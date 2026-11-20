@@ -163,8 +163,15 @@ object Presets {
     )
 
 
+    /** DeepSeek。两个音色，没有模型这一格，语种跟着文本走。 */
+    val DEEPSEEK = Preset(
+        key = "deepseek", name = "DeepSeek", base = "https://api.deepseek.com", proto = "deepseek",
+        models = emptyList(),
+        voices = listOf("stella", "tide"),
+    )
+
     /** 这几家的音色名直接写在嗓源上，音色页照着列。 */
-    val WITH_VOICES = setOf("speech", "volc", "minimax", "bailian")
+    val WITH_VOICES = setOf("speech", "volc", "minimax", "bailian", "deepseek")
 
     /** 按地址猜是谁家的，用来给「模型」那一栏列候选。 */
     fun byBase(base: String): Preset? {
@@ -177,6 +184,7 @@ object Presets {
             b.contains("siliconflow") -> SILICON
             b.contains("openai.com") -> OPENAI
             b.contains("xiaomimimo") || b.contains("mimo") -> MIMO
+            b.contains("deepseek") -> DEEPSEEK
             else -> null
         }
     }
@@ -189,6 +197,7 @@ object Presets {
             "volc" -> VOLC.models
             "minimax" -> MINIMAX.models
             "bailian" -> QWEN.models
+            "deepseek" -> DEEPSEEK.models
             // 认不出的地址不给候选。宁可空着让人自己填，也不给一份猜的 —— 猜错只会 400。
             else -> emptyList()
         }
@@ -240,6 +249,7 @@ object Presets {
             "volc" -> VOLC.voices
             "minimax" -> MINIMAX.voices
             "bailian" -> QWEN.voices
+            "deepseek" -> DEEPSEEK.voices
             else -> emptyList()
         }
     }
@@ -264,6 +274,9 @@ object Engines {
             voices = Presets.MINIMAX.voices.joinToString(",")),
         EngineCfg("bailian", "阿里百炼", VoiceSource.OPENAI.name, base = "https://dashscope.aliyuncs.com", model = "qwen3-tts-flash", proto = "bailian",
             voices = Presets.QWEN.voices.joinToString(",")),
+        /* 这家没有模型这一格，地址后面直接挂音色名。 */
+        EngineCfg("deepseek", "DeepSeek", VoiceSource.OPENAI.name, base = "https://api.deepseek.com", proto = "deepseek",
+            voices = Presets.DEEPSEEK.voices.joinToString(",")),
     )
 
     fun decode(raw: String?): List<EngineCfg> {
@@ -271,19 +284,20 @@ object Engines {
         val t = object : TypeToken<List<EngineCfg>>() {}.type
         val list = runCatching { gson.fromJson<List<EngineCfg>>(raw, t) }.getOrNull()
         if (list.isNullOrEmpty()) return DEFAULT
-        // 只留 http(s) 地址、协议认得的条目；其余的（含已下架的）丢掉。
-        val known = setOf("mimo", "speech", "volc", "minimax", "bailian", "system")
+        // 只留 http(s) 地址、协议认得的条目；其余的丢掉。本机那一格 base 存包名。
+        val known = setOf("mimo", "speech", "volc", "minimax", "bailian", "deepseek", "system")
         val out = list.filter { e ->
             val b = (e.base ?: "").trim().lowercase()
-            (b.isEmpty() || b.startsWith("http")) && e.protocol in known
-        }.toMutableList()
+            (b.isEmpty() || b.startsWith("http") || e.protocol == "system") &&
+                e.protocol in known && local(e)
+        }.distinctBy { it.id }.toMutableList()
         DEFAULT.forEach { d -> if (out.none { it.id == d.id }) out.add(d) }
         // 模型不许空：空着的按地址补一个，同时把协议补齐。
         // 每条各包一层 —— 一条坏数据不该让整个声源表读不出来。
         return out.mapNotNull { e ->
             runCatching {
                 val p = e.protocol
-                /* 老存档里没有音色这一串 —— 那时候压根没往 DEFAULT 里写。 */
+                /* 音色那一串可能没有，缺了按地址补。 */
                 val v = e.voices
                 val filled = if (v.isNullOrBlank()) {
                     Presets.voicesFor(e.base ?: "", p).joinToString(",").ifBlank { null }
@@ -298,8 +312,33 @@ object Engines {
 
     fun open(list: List<EngineCfg>): List<EngineCfg> = list.filter { it.on }
 
+    /** 本机一副话音那一条的 id：包名后面接话音名。 */
+    fun sysId(pkg: String, raw: String): String = "sys:" + pkg.trim() + "#" + raw.trim()
+
+    /** 整台引擎的 id。话音表里的 [Voice.engine] 用它，列到声源上时再换成具体那一条。 */
+    fun sysId(pkg: String): String = "sys:" + pkg.trim()
+
+    /** 本机这一条配的是哪一副话音。没配话音名的是整台条目，声源里不收。 */
+    private fun local(e: EngineCfg): Boolean =
+        e.protocol != "system" || (e.id.startsWith("sys:") && e.id.contains('#') && !e.voices.isNullOrBlank())
+
     fun first(list: List<EngineCfg>, kind: VoiceSource): EngineCfg? =
         list.firstOrNull { it.src == kind && it.on } ?: list.firstOrNull { it.src == kind }
+
+    /**
+     * 这套协议有没有「模型」这一格。
+     *
+     * DeepSeek 没有：地址后面直接挂音色名，模型名无处可填。
+     */
+    fun needsModel(proto: String): Boolean = proto != "deepseek"
+
+    /**
+     * 音色页有没有东西可列。
+     *
+     * 只看模型那一格 —— 地址和钥匙空着是「还没配好」，音色照样列得出来，缺什么定音页会写。
+     */
+    fun voicable(e: EngineCfg): Boolean =
+        e.protocol == "system" || !needsModel(e.protocol) || (e.model ?: "").trim().isNotBlank()
 
     /** 这副能不能真念出声。返回一句人话，null = 能用。 */
     fun blocked(e: EngineCfg): String? {
@@ -308,7 +347,7 @@ object Engines {
         if (e.base.isNullOrBlank()) return "还没填接口地址"
         if (e.key.isNullOrBlank()) return "还没填钥匙"
         // 判原始值：modelOr() 会补默认，拿它判等于永远不空。
-        if ((e.model ?: "").trim().isBlank()) return "还没填模型"
+        if (needsModel(e.protocol) && (e.model ?: "").trim().isBlank()) return "还没填模型"
         return null
     }
 }

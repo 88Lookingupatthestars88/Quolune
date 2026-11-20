@@ -70,9 +70,9 @@ fun PreviewScreen(
 
     var custom by remember { mutableStateOf(app.box.custom()) }
 
-    /* 池子里是「现在开着的嗓源底下。 */
-    val pool = remember(custom, s.enginesJson) {
-        Catalog.ours(s.engines, custom, emptyList())
+    /* 池子：现在开着的嗓源底下的全部音色。 */
+    val pool = remember(custom, s.enginesJson, com.pagefold.reader.voice.SysCache.rev) {
+        Catalog.ours(s.engines, custom)
     }
 
     /* 一进这一页，手上就得先有一副嗓子。 */
@@ -96,9 +96,11 @@ fun PreviewScreen(
     val playing = probe != null && Audition.playingId == probe.id
     val proto = probe?.let { protoOf(it, s.engines) }.orEmpty()
     val model = probe?.let { modelOf(it, s.engines) }.orEmpty()
-    val knobs = if (probe == null) emptyList() else com.pagefold.reader.field.Caps
-        .of(proto, model, probe.kind)
-        .filter { it != com.pagefold.reader.field.Knob.MOOD }
+    /** 这一副能调的所有项。调门单独摆在这一页上半截，不在「这一副怎么念」里。 */
+    val allKnobs = if (probe == null) emptyList()
+                   else com.pagefold.reader.field.Caps.of(proto, model, probe.kind)
+    val wantsMood = com.pagefold.reader.field.Knob.MOOD in allKnobs
+    val knobs = allKnobs.filter { it != com.pagefold.reader.field.Knob.MOOD }
     val savedTune = remember(probe?.id, s.speed, s.pitch, rev) {
         if (probe != null && app.vtune.has(probe.id)) app.vtune.of(probe.id)
         else com.pagefold.reader.field.Vt()
@@ -130,13 +132,18 @@ fun PreviewScreen(
                         s.copy(style = style.trim().ifBlank { s.style }), v, text,
                         com.pagefold.reader.book.Cue.of(text, null, null, style, !s.cue),
                         one = if (knobs.isEmpty()) null else draft,
+                        trial = true,
                     )
                 }
                     .getOrElse { err = Why.say(it, ""); null }
             }
             busy = false
             if (clip == null) return@launch
-            if (!Audition.play(v.id, clip.file.absolutePath)) err = "声音存下来了，播放器解不开这一段"
+            val tune = if (probe != null && app.vtune.has(probe.id)) app.vtune.of(probe.id) else null
+            val mute = if (knobs.isEmpty()) tune else draft
+            if (!Audition.play(v.id, clip.file.absolutePath, mute?.speed ?: 100, mute?.pitch ?: 100)) {
+                err = "声音存下来了，播放器解不开这一段"
+            }
         }
     }
 
@@ -231,8 +238,8 @@ fun PreviewScreen(
             }
         }
 
-        // 情绪
-        run {
+        // 情绪。不认这一格的引擎不摆 —— 摆了也只能是白按。
+        if (wantsMood) run {
             item { BlockLabel("情绪") }
             item {
                 Column(Modifier.padding(horizontal = Sz.gutter)) {

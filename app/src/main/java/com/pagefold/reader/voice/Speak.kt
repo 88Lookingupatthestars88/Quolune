@@ -136,14 +136,14 @@ object Speak {
         }
 
     /** 把长错误压成一句能塞进卡片副标题的话。 */
-    private fun short(msg: String?): String {
+    internal fun short(msg: String?): String {
         val m = (msg ?: "").trim()
         if (m.isEmpty()) return "没验成"
         // 我们这边自己拦下来的，原话就已经是一句人话。
         if (m.startsWith("「") || m.startsWith("不能合成") || m.startsWith("还没填") ||
             m.startsWith("钥匙")
         ) return m.take(30)
-        val code = Regex("(?:语音口|MiMo)\\s*(\\d{3})").find(m)?.groupValues?.get(1)
+        val code = Regex("(?:语音口|MiMo|DeepSeek)\\s*(\\d{3})").find(m)?.groupValues?.get(1)
         if (code != null) return when {
             code == "401" || code == "403" -> "钥匙不对"
             code == "404" -> "这家没有这个模型"
@@ -236,7 +236,7 @@ object Speak {
         if (probeLoad().remove(probeSig(proto, base, key, model)) != null) probeSave()
     }
 
-    private fun probeKeep(proto: String, base: String, key: String, model: String, verdict: String) {
+    internal fun probeKeep(proto: String, base: String, key: String, model: String, verdict: String) {
         probeMem[probeSig(proto, base, key, model)] = verdict
         probeSave()
     }
@@ -262,7 +262,7 @@ object Speak {
         if (base.isBlank() || key.isBlank()) return@withContext emptyList()
         // 钥匙不合规就不发，界面拿到空清单自己填模型。
         if (Auth.why(key) != null) return@withContext emptyList()
-        if (proto == "volc" || proto == "system") return@withContext emptyList()
+        if (proto == "volc" || proto == "system" || proto == "deepseek") return@withContext emptyList()
         val url = modelsEndpoint(base, proto).let {
             // 硅基的清单按大类分，audio 里只有语音相关的；文字模型全被挡在外面。
             if (proto == "speech" && base.contains("siliconflow") && !it.contains("?")) "$it?type=audio"

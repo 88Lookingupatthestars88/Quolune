@@ -41,7 +41,7 @@ data class Settings(
     val homeTab: Int = 3,
     val choseHome: Boolean = false,
     val uiRev: Int = 0,
-    /** 已同意的条款版本。0 = 没同意过。政策大改时把 Consent.CONSENT_REV 加一。 */
+    /** 已同意的条款版本。0 = 没同意过。政策大改时把 Consent.CONSENT_REV 换成一个更大的数。 */
     val consentRev: Int = 0,
 
     // 阅读
@@ -272,7 +272,7 @@ class Field(ctx: Context) {
         if (had < 1) out = out.copy(dark = false, choseHome = false)
         // 二版起：嗓子一律先关着，由用户自己拨。钥匙地址都留着。
         if (had < 2) out = out.copy(enginesJson = Engines.encode(out.engines.map { it.copy(on = false) }))
-        // 三版起请求间隔默认 600ms，老存档里 ≥2000 的改下来。
+        // 请求间隔落在 100..2000，存档里更小的值抬到 100。
         if (had < 3 && out.reqIntervalMs >= 2000) out = out.copy(reqIntervalMs = 600)
         out.copy(uiRev = REV)
     }.getOrDefault(Settings(uiRev = REV))

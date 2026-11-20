@@ -108,7 +108,7 @@ class BookPlayer : Service() {
             state.value = state.value.copy(error = msg)
         }
 
-        /** 把一句过场话撤掉。错误条现在自己会走（四秒），但状态里那个字段还留着 ——退出这一页再回来，同一句话又贴在头顶，看着像刚又出了一次事。 */
+        /** 清掉状态里那句话。错误条四秒自己走，这个字段不清，回这一页会再贴一次。 */
         fun forget() {
             val cur = state.value
             if (cur.error != null) state.value = cur.copy(error = null)
@@ -153,9 +153,6 @@ class BookPlayer : Service() {
         if (e is CancellationException) return@CoroutineExceptionHandler
         val stack = android.util.Log.getStackTraceString(e)
         runCatching { File(filesDir, "last-crash-player.txt").writeText(stack) }
-        runCatching {
-            getExternalFilesDir(null)?.let { File(it, "last-crash-player.txt").writeText(stack) }
-        }
         state.value = state.value.copy(
             playing = false, loading = false,
             error = "念到一半断了：" + (e.message ?: e.javaClass.simpleName),
@@ -351,15 +348,27 @@ class BookPlayer : Service() {
         if (p != null) runCatching { applyRate(p) }
     }
 
+    /** 这台机器能放到多快。头一次设不上去就记下来，之后不再试。 */
+    private var topSpeed = 3f
+
     private fun applyRate(mp: MediaPlayer) {
         val r = bookRate
         if (r !in 50..300) return
-        runCatching {
-            mp.playbackParams = mp.playbackParams.setSpeed(r / 100f).setPitch(1f)
+        val want = (r / 100f).coerceAtMost(topSpeed)
+        val set = runCatching {
+            mp.playbackParams = mp.playbackParams.setSpeed(want).setPitch(1f)
+            true
+        }.getOrDefault(false)
+        if (!set) {
+            /* 多数机型夹在 2 倍。设不上去就退回两倍，并把这件事说出去。 */
+            topSpeed = 2f
+            runCatching { mp.playbackParams = mp.playbackParams.setSpeed(2f).setPitch(1f) }
+            state.value = state.value.copy(error = "这台机器最高两倍，已经按两倍念")
+            return
         }
-        if (r != 100) {
+        if (want != 1f) {
             // 有些机型必须在 start 之后再设一次才认。
-            runCatching { if (mp.isPlaying) mp.playbackParams = mp.playbackParams.setSpeed(r / 100f) }
+            runCatching { if (mp.isPlaying) mp.playbackParams = mp.playbackParams.setSpeed(want) }
         }
     }
 
@@ -584,7 +593,7 @@ class BookPlayer : Service() {
                                 lineStyle,
                             )
                         }.getOrElse { Reading(Reading.Kind.NARRATE, 0, 0, 0, 320, lineStyle) }
-                        val r = runCatching { synth.make(live, v, line.text, read, before, after, rate = bookRate) }
+                        val r = runCatching { synth.make(live, v, line.text, read, before, after) }
                         if (r.isSuccess) { clip = r.getOrNull(); err = null; break }
                         err = r.exceptionOrNull()
                         if (round < retries) delay(s.retryDelayMs.toLong().coerceIn(200, 5000))
@@ -786,7 +795,7 @@ class BookPlayer : Service() {
 
         val now = runCatching { (application as App).field.now }.getOrDefault(s)
         val fresh = runCatching {
-            Catalog.ours(now.engines, (application as App).box.custom(), emptyList())
+            Catalog.ours(now.engines, (application as App).box.custom())
         }.getOrDefault(emptyList())
 
         return Catalog.byName(fresh, named)

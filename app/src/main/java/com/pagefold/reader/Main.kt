@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -88,7 +89,7 @@ class Main : ComponentActivity() {
                 }
             }
             CompositionLocalProvider(LocalSkin provides skin) {
-                Root(s, app, jumpVoice)
+                TapAway { Root(s, app, jumpVoice) }
             }
         }
     }
@@ -102,6 +103,30 @@ class Main : ComponentActivity() {
     }
 }
 
+/**
+ * 点到没被别处吃掉的地方，就收掉焦点、放下键盘。
+ *
+ * 走 Final 那一趟：输入框、按钮先自己处理完，剩下的空白才轮到这儿。
+ */
+@Composable
+private fun TapAway(content: @Composable () -> Unit) {
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val keys = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    Box(
+        Modifier.fillMaxSize().pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val e = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Final)
+                    if (e.type != androidx.compose.ui.input.pointer.PointerEventType.Press) continue
+                    if (e.changes.any { it.isConsumed }) continue
+                    focus.clearFocus()
+                    keys?.hide()
+                }
+            }
+        }
+    ) { content() }
+}
+
 /** 撑满剩余高度：Column 里给 Box 用。 */
 private fun Modifier.fillRest(): Modifier = this.layout { measurable, constraints ->
     val h = if (constraints.maxHeight == Int.MAX_VALUE) 0 else constraints.maxHeight
@@ -111,7 +136,7 @@ private fun Modifier.fillRest(): Modifier = this.layout { measurable, constraint
 
 @Composable
 private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
-    /* 没同意过条款的人，先看那一屏。同意之后 consentRev 变 1，之后每次进来都走下面。 */
+    /* 没同意过当前条款的人先看那一屏。同意之后 consentRev 记成 CONSENT_REV，之后每次进来都走下面。 */
     if (s.consentRev < CONSENT_REV) {
         ConsentScreen(app)
         return

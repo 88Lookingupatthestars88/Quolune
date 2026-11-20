@@ -47,6 +47,9 @@ class App : Application() {
         synth.sync(field.now)
         // 给「验过的结论」一个落盘的地方，不接就只在内存里记。
         com.pagefold.reader.voice.Speak.attach(this)
+        // 本机朗读引擎的话音表：落盘一份，冷启动先把开着的那几台排上。
+        com.pagefold.reader.voice.SysCache.attach(this, sys, work)
+        com.pagefold.reader.voice.SysCache.warm(field.now.engines)
         /* 旧书补版式快照。挪到后台线程：这一步要读 shelf.json、给每本书拼一份 JSON。 */
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
             .launch {

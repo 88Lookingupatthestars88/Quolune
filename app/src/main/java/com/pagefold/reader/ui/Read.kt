@@ -1600,8 +1600,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                         }
                         // 念到哪一句，就翻到那一页。
                         // 比的是原文偏移：srcStart 记的是章内第几个字，不是排版后的位置。
-                        // 两套坐标一比，永远算成第 0 页，于是「左定在章首页」。现在统一用原文偏移。
-                        LaunchedEffect(ps.chapter, ps.srcStart, playing, bar.state) {
+                                                LaunchedEffect(ps.chapter, ps.srcStart, playing, bar.state) {
                             if (!playing || ps.srcStart < 0 || pagesNow.isEmpty()) return@LaunchedEffect
                             if (ps.chapter != ch) return@LaunchedEffect
                             // 选着字的时候不翻页。
@@ -1995,7 +1994,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                 onStopHere = {
                     app.field.edit { it.copy(stopAtChapter = !it.stopAtChapter, autoNext = it.stopAtChapter) }
                 },
-                // 「不听了」：连通知一起收掉。之前只能在通知里暂停，关不掉。
+                // 「不听了」：连通知一起收掉。
                 onQuit = { BookPlayer.quit() },
                 hasSession = ps.total > 0,
             )
@@ -2008,7 +2007,9 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         if (rateOpen) {
             SheetPop(title = "念多快", onClose = { rateOpen = false }) {
                 FlowChips(
-                    listOf(75, 90, 100, 110, 125, 150, 175, 200).map { it to rateText(it) },
+                    com.pagefold.reader.field.Caps.SPEEDS.map {
+                        it to com.pagefold.reader.field.Caps.speedText(it)
+                    },
                     rate,
                 ) { r ->
                     bookRate = r
@@ -2171,7 +2172,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     if (from >= chapters.size) {
                         BookPlayer.say("已经是最后一章了，没得往后备")
                     } else {
-                        val pool = Catalog.ours(effNow.engines, app.box.custom(), emptyList())
+                        val pool = Catalog.ours(effNow.engines, app.box.custom())
                         if (pool.isEmpty()) {
                             BookPlayer.say("一副嗓音都没开。先去定音里开一路")
                         } else {
@@ -2262,7 +2263,7 @@ private fun profileOf(app: App, book: BookMeta, s: Settings): CastProfile {
     val cb = if (own.isNotBlank()) RuleCodec.fromJson(own) else null
     // 存下来的那个名字未必还在音色库里。
     // 先看它在不在音色库里，不在就按开着的嗓源给一副，再不行留空 —— 空就是「未设置」。
-    val pool = Catalog.ours(s.engines, app.box.custom(), emptyList())
+    val pool = Catalog.ours(s.engines, app.box.custom())
     val narWant = cb?.narrator?.ifBlank { s.narratorVoice } ?: s.narratorVoice
     val diaWant = cb?.dialog?.ifBlank { s.defaultVoice } ?: s.defaultVoice
     /* 引擎认谁：勾上的名单 + 角色自己的名字。词表里点掉的词不算 —— 那一格点的就是「别拿它认人」。 */
@@ -2337,7 +2338,7 @@ private suspend fun beginAtUnsafe(
     val cut = (rel - head.srcStart).coerceIn(0, head.text.length)
 
     // 只用真正开着的嗓子。一副都没开就直说，别拿写死的名字去念。
-    val pool = Catalog.ours(s.engines, app.box.custom(), emptyList())
+    val pool = Catalog.ours(s.engines, app.box.custom())
     if (pool.isEmpty()) {
         BookPlayer.say("一副嗓音都没开。去定音里开一路，再来开讲")
         return
@@ -2864,10 +2865,7 @@ private fun BookSetSheet(
                 TuneRow("prefetch", eff, ::tune)
                 TuneRow("cacheChapters", eff, ::tune)
 
-                // 备到哪儿了，得写出来。
-                //
-                // 之前只有一个按钮，按下去什么也看不见 —— 不知道在备、备到了第几回、
-                // 备没备完。断网前想确认一下，只能去猜。
+                // 备到哪儿了，得写出来：在备、备到第几回、备没备完。
                 Spacer(Modifier.height(10.dp))
                 PrepLine(
                     prep,
@@ -2914,7 +2912,7 @@ private fun BookSetSheet(
 
         val vKey = pickVoice
         if (vKey != null) {
-            val pool = remember(settings.engines, app.box.custom().size) {
+            val pool = remember(settings.engines, app.box.custom().size, com.pagefold.reader.voice.SysCache.rev) {
                 Catalog.groups(settings.engines, app.box.custom())
             }
             VoiceSheet(
@@ -3371,12 +3369,7 @@ private fun Tap(
     }
 }
 
-private fun rateText(r: Int): String {
-    if (r == 100) return "原速"
-    val v = r / 100f
-    val t = if (v * 100 % 100 == 0f) "%.0f".format(v) else "%.2f".format(v).trimEnd('0')
-    return t + "x"
-}
+private fun rateText(r: Int): String = com.pagefold.reader.field.Caps.speedText(r)
 
 private fun sleepShort(sec: Int): String {
     val m = (sec + 59) / 60

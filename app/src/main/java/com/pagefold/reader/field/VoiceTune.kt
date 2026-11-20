@@ -6,19 +6,21 @@ import com.google.gson.reflect.TypeToken
 import java.io.File
 
 /**
-* 一副音色自己的调法。
-*
-* @param mood     情绪档。空 = 跟随全局那一档。
-* @param lang     语种。只有百炼认这一格。
-* @param bright   低沉 ↔ 明亮。MiniMax 的 voice_modify.pitch，-100…100。
-* @param soft     刚劲 ↔ 轻柔。MiniMax 的 voice_modify.intensity。
-* @param clear    浑厚 ↔ 清脆。MiniMax 的 voice_modify.timbre。
-* @param fx       音效，空 = 不加。MiniMax 的 sound_effects。
-* @param dialect  方言，空 = 不指定。火山的 explicit_dialect。
-* @param silence  段尾留多少静音，毫秒。火山的 silence_duration。
-*/
+ * 一副音色自己的调法。
+ *
+ * @param mood     情绪档。空 = 跟随全局那一档。
+ * @param lang     语种。只有百炼认这一格。
+ * @param bright   低沉 ↔ 明亮。MiniMax 的 voice_modify.pitch，-100…100。
+ * @param soft     刚劲 ↔ 轻柔。MiniMax 的 voice_modify.intensity。
+ * @param clear    浑厚 ↔ 清脆。MiniMax 的 voice_modify.timbre。
+ * @param fx       音效，空 = 不加。MiniMax 的 sound_effects。
+ * @param dialect  方言，空 = 不指定。火山的 explicit_dialect。
+ * @param silence  段尾留多少静音，毫秒。火山的 silence_duration。
+ */
 data class Vt(
+    /** 语速百分数，50–300。只在试听和对外当朗读引擎时用，书里按书自己那档。 */
     val speed: Int = 100,
+    /** 音调百分数，50–200。同上。 */
     val pitch: Int = 100,
     val volume: Int = 100,
     val mood: String = "",
@@ -117,6 +119,21 @@ enum class Knob(val cn: String) {
 */
 object Caps {
 
+    /** 语速档。100 = 原速。 */
+    val SPEEDS = listOf(50, 75, 100, 125, 150, 200, 300)
+
+    /** 音调档。100 = 原调。 */
+    val PITCHES = listOf(50, 75, 100, 125, 150, 200)
+
+    /** 语速写法：0.5×、0.75×、1.0×、1.25×、1.5×、2.0×、3.0×。 */
+    fun speedText(v: Int): String {
+        val f = v / 100f
+        val s = if (f * 10 == (f * 10).toInt().toFloat()) "%.1f".format(f) else "%.2f".format(f)
+        return s + "×"
+    }
+
+    fun pitchText(v: Int): String = "$v%"
+
     fun langOptions(): List<String> = listOf(
         "Chinese", "Auto", "English", "Japanese", "Korean",
         "German", "French", "Russian", "Italian", "Portuguese", "Spanish",
@@ -148,13 +165,15 @@ object Caps {
         }
         /* 小米的复刻音色更要紧：它的「快慢」只能靠一条 user 消息表达，而复刻音色发 user 正是「开头多一句话」的入口。 */
         if (proto == "mimo" && kind == "clone") return emptyList()
+        /* 快慢和音调一律在播放那一层设，跟对面认不认无关，所以每一家都有这两格。 */
         return when (proto) {
             "system" -> listOf(Knob.SPEED, Knob.PITCH)
             // 小米没有数值字段，但官方示例就是拿 user 消息说「快一点、高一点」。
             "mimo" -> listOf(Knob.SPEED, Knob.PITCH, Knob.MOOD, Knob.TEMP)
-            // 标准口：speed 一定有；gain 是硅基的，gpt-4o 多一个 instructions。
+            // 标准口：gain 是硅基的，gpt-4o 多一个 instructions。
             "speech" -> buildList {
                 add(Knob.SPEED)
+                add(Knob.PITCH)
                 if (isSilicon(m)) add(Knob.VOLUME)
                 if (m.contains("gpt-4o")) add(Knob.MOOD)
             }
@@ -168,8 +187,8 @@ object Caps {
                 Knob.SPEED, Knob.PITCH, Knob.VOLUME, Knob.MOOD,
                 Knob.DIALECT, Knob.SILENCE,
             )
-            "bailian" -> listOf(Knob.LANG)
-            else -> emptyList()
+            "bailian" -> listOf(Knob.SPEED, Knob.PITCH, Knob.LANG)
+            else -> listOf(Knob.SPEED, Knob.PITCH)
         }
     }
 
@@ -182,11 +201,11 @@ object Caps {
     fun brief(proto: String, model: String): String = when (proto) {
         "system" -> "快慢 · 音调"
         "mimo" -> "快慢 · 音调 · 调门 · 温度"
-        "speech" -> if (isSilicon(model)) "快慢 · 增益" else "快慢"
+        "speech" -> if (isSilicon(model)) "快慢 · 音调 · 增益" else "快慢 · 音调"
         "minimax" -> "快慢 · 音调 · 轻重 · 质地 · 音效"
         "volc" -> "快慢 · 音调 · 轻重 · 方言"
-        "bailian" -> "语种"
-        else -> ""
+        "bailian" -> "快慢 · 音调 · 语种"
+        else -> "快慢 · 音调"
     }
 
     /** 这一副为什么没法调。界面上写一行字，别让人以为是坏了。 */

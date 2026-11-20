@@ -225,8 +225,7 @@ object Speaker {
             if (pool.isEmpty()) continue
             val p = Regex("(她|她们|他|他们|那人|此人|对方|众人)").find(cl)?.groupValues?.get(1).orEmpty()
             val want = if (p == "她" || p == "她们") "f" else if (p == "他" || p == "他们") "m" else ""
-            /* 性别对不上、或者这个代词压根分不出男女，就不要再猜了：猜出来的是段里
-* 顺位第一的那个人，跟这一句没有关系。留给上层按对话交替推。 */
+            /* 代词分不出男女时不猜，留给上层按对话交替推。 */
             if (want.isBlank()) continue
             val pick = pool.firstOrNull { b.gender[it.second] == want } ?: continue
             return pick.second

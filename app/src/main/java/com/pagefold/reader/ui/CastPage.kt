@@ -105,7 +105,7 @@ fun CastScreen(
 ) {
     val s = LocalSkin.current
     val scope = rememberCoroutineScope()
-    val groups = remember(book?.id, app.box.custom().size) {
+    val groups = remember(book?.id, app.box.custom().size, com.pagefold.reader.voice.SysCache.rev) {
         Catalog.groups(app.field.now.engines, app.box.custom())
     }
 
