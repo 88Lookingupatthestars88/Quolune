@@ -91,7 +91,8 @@ import kotlin.math.abs
 fun LibraryScreen(
     s: Settings,
     app: App,
-    open: (BookMeta) -> Unit,
+    /** 打开一本书。第二个参数 = 进去之后直接开口念。 */
+    open: (BookMeta, Boolean) -> Unit,
     grid: LazyGridState,
 ) {
     val skin = LocalSkin.current
@@ -170,7 +171,7 @@ verticalArrangement = Arrangement.spacedBy(22.dp),
 ) {
 if (keep != null && keep.openedAt > 0) {
 item(span = { GridItemSpan(maxLineSpan) }) {
-ContinueBar(keep, { open(keep) })
+ContinueBar(keep, { open(keep, false) }, { open(keep, true) })
 }
 }
 item(span = { GridItemSpan(maxLineSpan) }) {
@@ -192,7 +193,7 @@ items(shown, key = { it.id }) { b ->
 BookTile(
 b = b,
 reading = keep?.id == b.id && b.openedAt > 0,
-onOpen = { open(b) },
+onOpen = { open(b, false) },
 onHold = { menu = b },
 )
 }
@@ -356,11 +357,11 @@ private fun EmptyShelf(onImport: () -> Unit) {
 // ───────────────────────── 接着听 ─────────────────────────
 
 @Composable
-private fun ContinueBar(b: BookMeta, onOpen: () -> Unit) {
+private fun ContinueBar(b: BookMeta, onOpen: () -> Unit, onPlay: () -> Unit) {
     val s = LocalSkin.current
     Panel(lift = true, onClick = onOpen) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Cover(b, Modifier.width(52.dp).height(70.dp))
+            Cover(b, Modifier.width(52.dp).height(70.dp), bar = false)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -375,7 +376,8 @@ private fun ContinueBar(b: BookMeta, onOpen: () -> Unit) {
             }
             Spacer(Modifier.width(10.dp))
             Box(
-                Modifier.size(40.dp).clip(CircleShape).background(s.flame),
+                Modifier.size(40.dp).clip(CircleShape).background(s.flame)
+                    .tap { onPlay() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Default.PlayArrow, "接着读", tint = s.onFlame, modifier = Modifier.size(22.dp))
@@ -502,7 +504,7 @@ private fun chapterLabel(b: BookMeta): String {
 
 /** 封面。用户换过就用他那张；没换过就现画一块纸。 */
 @Composable
-private fun Cover(b: BookMeta, modifier: Modifier) {
+private fun Cover(b: BookMeta, modifier: Modifier, bar: Boolean = true) {
     val s = LocalSkin.current
 
     if (b.cover.isNotBlank()) {
@@ -515,7 +517,7 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
-                ProgressLine(b)
+                if (bar) ProgressLine(b)
             }
             return
         }
@@ -635,7 +637,7 @@ private fun Cover(b: BookMeta, modifier: Modifier) {
                 }
             }
         }
-        ProgressLine(b)
+        if (bar) ProgressLine(b)
     }
 }
 
@@ -692,16 +694,32 @@ private fun wrapTitle(t: String, per: Int): List<String> {
     return if (out.isEmpty()) listOf(t) else out
 }
 
+/** 条子最细的那一截。四千章的书读到第五章，按比例算出来不到一个像素。 */
+private const val MIN_BAR = 0.02f
+
+/**
+ * 封面底边那条进度：读到第几章。
+ *
+ * 按章算，不按全书字数比 —— 那个数存在存档里，是某一刻的快照，冷启动直接拿出来画，
+ * 跟目录重切过的书对不上。章数是整数，读出来就是真的。
+ *
+ * 章数还不知道（刚收进来、还没打开过）就不画：画满会被当成读完了。
+ */
 @Composable
 private fun ProgressLine(b: BookMeta) {
     val s = LocalSkin.current
+    val total = b.chapters
+    if (total <= 1) return
+    val at = b.chapterIndex.coerceIn(0, total - 1)
+    /* 第一章不画；往后的按比例，最细也留这么一截，不然大书开头看着跟没读一样。 */
+    val p = if (at <= 0) 0f else maxOf(at.toFloat() / (total - 1), MIN_BAR)
     Box(Modifier.fillMaxSize()) {
         Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp)
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().height(2.dp)
                 .background(s.ink.copy(alpha = 0.08f))
         )
         Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth(b.progress.coerceIn(0f, 1f)).height(2.dp)
+            Modifier.align(Alignment.BottomStart).fillMaxWidth(p.coerceIn(0f, 1f)).height(2.dp)
                 .background(s.flame.copy(alpha = 0.75f))
         )
     }

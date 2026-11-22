@@ -196,7 +196,17 @@ object Catalog {
         val all = SysCache.of(e.base)
         val want = (e.voices ?: "").trim()
         if (want.isBlank()) return all
-        val hit = all.firstOrNull { it.param == want } ?: return emptyList()
+        val hit = all.firstOrNull { it.param == want }
+        /* 话音表还没读到的那一会儿也列出来：param 里已经写着包名和话音名，念不需要那张表。 */
+            ?: return listOf(
+                Voice(
+                    id = e.id,
+                    name = e.name,
+                    kind = "system",
+                    engine = e.id,
+                    param = want,
+                )
+            )
         return listOf(hit.copy(id = e.id, engine = e.id))
     }
 

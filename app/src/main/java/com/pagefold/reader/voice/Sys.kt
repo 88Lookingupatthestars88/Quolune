@@ -7,12 +7,15 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import com.pagefold.reader.field.Engines
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -49,6 +52,18 @@ class SysVoice(ctx: Context) {
     /** key = 引擎包名，"" 表示系统默认引擎。 */
     private val pool = ConcurrentHashMap<String, TextToSpeech>()
 
+    /** 正在念的那几句：utteranceId → 结局。0 = 念完了，其余是错误码。 */
+    private val talking = ConcurrentHashMap<String, CompletableDeferred<Int>>()
+
+    /** 一台引擎一把锁。话音、语种、语速、音调都是这一个实例上的状态，两路同时用互相顶掉。 */
+    private val gates = ConcurrentHashMap<String, Mutex>()
+
+    /** 系统默认朗读引擎是哪一台。 */
+    private fun defaultEngine(): String = runCatching {
+        android.provider.Settings.Secure
+            .getString(appCtx.contentResolver, "tts_default_synth").orEmpty()
+    }.getOrDefault("")
+
     // ───────────────────────── 初始化 ─────────────────────────
 
     private suspend fun initOne(key: String): TextToSpeech = suspendCancellableCoroutine { cont ->
@@ -78,12 +93,32 @@ class SysVoice(ctx: Context) {
         pool[key]?.let { return it }
         val made = withTimeoutOrNull(9000) { initOne(key) }
             ?: throw IllegalStateException("引擎 ${key.ifBlank { "默认" }}等了半天没起来")
+        watch(made)
         val prev = pool.putIfAbsent(key, made)
         if (prev != null) {
             runCatching { made.shutdown() }
             return prev
         }
         return made
+    }
+
+    /**
+     * 结局只收一次，按 utteranceId 分派。
+     *
+     * 监听器是挂在实例上的，一次只挂得住一个 —— 每念一句换一次，另一路正在等的就永远等不到。
+     */
+    private fun watch(t: TextToSpeech) {
+        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) { talking[utteranceId]?.complete(0) }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) { talking[utteranceId]?.complete(-1) }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                talking[utteranceId]?.complete(if (errorCode == 0) -1 else errorCode)
+            }
+        })
     }
 
     // ───────────────────────── 枚举 ─────────────────────────
@@ -149,7 +184,7 @@ class SysVoice(ctx: Context) {
         if (all.isEmpty()) return@withContext emptyList()
         val tmp = File(appCtx.cacheDir, "tts-try-" + pkg.hashCode().toString(16) + ".wav")
         val ok = runCatching {
-            file(PROBE, all.first().param, 100, 100, tmp, 6500)
+            file(PROBE, all.first().param, 100, 100, tmp, 9000)
             true
         }.getOrDefault(false)
         runCatching { tmp.delete() }
@@ -231,66 +266,84 @@ class SysVoice(ctx: Context) {
         }
     }
 
+    /**
+     * 让这一台引擎把 [text] 念进 [out]。
+     *
+     * 判据是 onDone，不是文件大小 —— 引擎一边合成一边往文件里写，
+     * 写到多少字节跟念完没念完没关系。
+     */
     suspend fun file(
         text: String,
         voiceParam: String,
         speed: Int,
         pitch: Int,
         out: File,
-        waitMs: Long = 25_000,
+        waitMs: Long = 20_000,
     ): File =
         withContext(Dispatchers.IO) {
             val (pkg, vname, langTag) = splitParam(voiceParam)
-            val engine = obtain(pkg.ifBlank { null })
+            val key = pkg.trim()
+            /* 指向自己就是环：这一句永远等不到声音，只会等满超时。 */
+            if (key == appCtx.packageName ||
+                (key.isEmpty() && defaultEngine() == appCtx.packageName)
+            ) {
+                throw IllegalStateException("这一副话音落在本应用自己身上，去定音里换一台本机引擎")
+            }
+            gates.computeIfAbsent(key) { Mutex() }.withLock {
+                val engine = obtain(key.ifBlank { null })
 
-            /* 话音和语种一起设。只设话音不设语种时，引擎会沿用上一个语种。 */
-            if (vname.isNotBlank()) {
-                val all = runCatching { engine.voices }.getOrNull().orEmpty()
-                val hit = all.firstOrNull { it.name == vname }
-                    ?: all.firstOrNull { it.name?.equals(vname, true) == true }
-                if (hit != null) {
-                    runCatching { engine.voice = hit }
-                    runCatching { engine.setLanguage(hit.locale) }
-                } else if (langTag.isNotBlank()) {
-                    runCatching {
-                        engine.setLanguage(java.util.Locale.forLanguageTag(langTag.replace('_', '-')))
+                /* 话音和语种一起设。只设话音不设语种时，引擎会沿用上一个语种。 */
+                if (vname.isNotBlank()) {
+                    val all = runCatching { engine.voices }.getOrNull().orEmpty()
+                    val hit = all.firstOrNull { it.name == vname }
+                        ?: all.firstOrNull { it.name?.equals(vname, true) == true }
+                    if (hit != null) {
+                        runCatching { engine.voice = hit }
+                        runCatching { engine.setLanguage(hit.locale) }
+                    } else if (langTag.isNotBlank()) {
+                        runCatching {
+                            engine.setLanguage(
+                                java.util.Locale.forLanguageTag(langTag.replace('_', '-'))
+                            )
+                        }
                     }
                 }
-            }
-            runCatching { engine.setSpeechRate((speed / 100f).coerceIn(0.3f, 3f)) }
-            runCatching { engine.setPitch((pitch / 100f).coerceIn(0.3f, 2.5f)) }
+                runCatching { engine.setSpeechRate((speed / 100f).coerceIn(0.3f, 3f)) }
+                runCatching { engine.setPitch((pitch / 100f).coerceIn(0.3f, 2.5f)) }
 
-            val id = "pf" + System.nanoTime()
-            out.parentFile?.mkdirs()
-            if (out.exists()) out.delete()
-
-            val err = AtomicReference<String?>(null)
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-                override fun onDone(utteranceId: String?) {}
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    if (utteranceId == id) err.compareAndSet(null, "合成失败")
+                val id = "pf" + System.nanoTime()
+                val slot = CompletableDeferred<Int>()
+                talking[id] = slot
+                out.parentFile?.mkdirs()
+                if (out.exists()) out.delete()
+                try {
+                    val r = engine.synthesizeToFile(text, Bundle(), out, id)
+                    if (r != TextToSpeech.SUCCESS) {
+                        throw IllegalStateException("引擎拒绝合成（返回 $r）")
+                    }
+                    val code = withTimeoutOrNull(waitMs) { slot.await() }
+                    if (code == null) {
+                        /* 超时的那一句还排在引擎里，停掉它，别把后面几路一起堵着。 */
+                        runCatching { engine.stop() }
+                        throw IllegalStateException("引擎 ${waitMs / 1000} 秒没念完这一句")
+                    }
+                    if (code != 0) {
+                        throw IllegalStateException(
+                            if (code < 0) "合成失败" else "没合成出来，错误码 $code"
+                        )
+                    }
+                    if (!out.exists() || out.length() < 1024) {
+                        throw IllegalStateException("引擎没吐出声音，多半是没装中文语音包")
+                    }
+                    out
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    /* 这一场被取消了（换书、换章、停止）。引擎还排着这句话，停掉它。 */
+                    runCatching { engine.stop() }
+                    throw e
+                } finally {
+                    talking.remove(id)
                 }
-                override fun onError(utteranceId: String?, errorCode: Int) {
-                    if (utteranceId == id) err.compareAndSet(null, "没合成出来，错误码 $errorCode")
-                }
-            })
-
-            val r = engine.synthesizeToFile(text, Bundle(), out, id)
-            if (r != TextToSpeech.SUCCESS) throw IllegalStateException("引擎拒绝合成（返回 $r）")
-
-            // synthesizeToFile 是异步的：轮询文件落地。
-            val deadline = System.currentTimeMillis() + waitMs
-            while (System.currentTimeMillis() < deadline) {
-                err.get()?.let { throw IllegalStateException(it) }
-                if (out.exists() && out.length() > 1024) return@withContext out
-                Thread.sleep(60)
             }
-            throw IllegalStateException(
-                if (out.exists()) "只写出了 ${out.length()} 字节，引擎可能没装语音包"
-                else "引擎没吐出文件，多半是没装中文语音包"
-            )
         }
 
     // ───────────────────────── 收尾 ─────────────────────────

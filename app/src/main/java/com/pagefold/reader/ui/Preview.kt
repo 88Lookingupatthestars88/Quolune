@@ -132,7 +132,6 @@ fun PreviewScreen(
                         s.copy(style = style.trim().ifBlank { s.style }), v, text,
                         com.pagefold.reader.book.Cue.of(text, null, null, style, !s.cue),
                         one = if (knobs.isEmpty()) null else draft,
-                        trial = true,
                     )
                 }
                     .getOrElse { err = Why.say(it, ""); null }
@@ -141,7 +140,9 @@ fun PreviewScreen(
             if (clip == null) return@launch
             val tune = if (probe != null && app.vtune.has(probe.id)) app.vtune.of(probe.id) else null
             val mute = if (knobs.isEmpty()) tune else draft
-            if (!Audition.play(v.id, clip.file.absolutePath, mute?.speed ?: 100, mute?.pitch ?: 100)) {
+            if (Audition.play(v.id, clip.file.absolutePath, mute?.speed ?: 100, mute?.pitch ?: 100)) {
+                app.synth.notePlayed(clip, text, v.name, trial = true)
+            } else {
                 err = "声音存下来了，播放器解不开这一段"
             }
         }

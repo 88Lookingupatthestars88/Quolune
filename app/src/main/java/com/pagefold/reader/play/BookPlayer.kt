@@ -543,6 +543,8 @@ class BookPlayer : Service() {
         updateNote(chapterTitle.ifBlank { "朗读中" })
 
         val slots = ConcurrentHashMap<Int, CompletableDeferred<Clip?>>()
+        /** 这一句是哪个音色念的。播完记账要用。 */
+        val said = ConcurrentHashMap<Int, String>()
         val queue = Channel<Int>(Channel.UNLIMITED)
         val queued = Collections.synchronizedSet(HashSet<Int>())
         val gate = Mutex()
@@ -562,6 +564,7 @@ class BookPlayer : Service() {
                 for (i in queue) {
                     val slot = slots[i] ?: continue
                     var clip: Clip? = null
+                    var who = ""
                     var err: Throwable? = null
                     for (round in 0..retries) {
                         if (my != gen) break
@@ -594,14 +597,23 @@ class BookPlayer : Service() {
                             )
                         }.getOrElse { Reading(Reading.Kind.NARRATE, 0, 0, 0, 320, lineStyle) }
                         val r = runCatching { synth.make(live, v, line.text, read, before, after) }
-                        if (r.isSuccess) { clip = r.getOrNull(); err = null; break }
+                        if (r.isSuccess) { clip = r.getOrNull(); who = v.name; err = null; break }
                         err = r.exceptionOrNull()
                         if (round < retries) delay(s.retryDelayMs.toLong().coerceIn(200, 5000))
                     }
-                    if (clip != null) slot.complete(clip)
+                    if (clip != null) {
+                        if (who.isNotEmpty()) said[i] = who
+                        slot.complete(clip)
+                    }
                     else slot.completeExceptionally(err ?: java.io.IOException("合成失败"))
                 }
             }
+        }
+
+        /* 首句单独先发。点下去到听见声音这一段，他只等得了一两秒。 */
+        if (from in lines.indices && queued.add(from)) {
+            slots[from] = CompletableDeferred()
+            queue.trySend(from)
         }
 
         var i = from
@@ -675,6 +687,7 @@ class BookPlayer : Service() {
                         aborted = true
                         break
                     }
+                    state.value = state.value.copy(error = "这一段跳过去了：" + Fail.read(lastErr))
                     continue
                 }
                 failStreak = 0
@@ -687,7 +700,12 @@ class BookPlayer : Service() {
 
                 val ok = withContext(Dispatchers.Main) { awaitPlay(clip.file.absolutePath) }
                 if (my != gen) return false
-                if (!ok) skipped++
+                if (!ok) {
+                    skipped++
+                    state.value = state.value.copy(error = "这一段放了没声，跳过去了")
+                } else {
+                    runCatching { synth.notePlayed(clip, line.text, said[i].orEmpty()) }
+                }
 
                 // 先把「下一句是哪句」定下来，再歇。
                 //

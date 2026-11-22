@@ -8,6 +8,7 @@ import com.pagefold.reader.field.Engines
 import com.pagefold.reader.field.Settings
 import com.pagefold.reader.field.VoiceSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -35,8 +36,17 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     /** 每副音色自己那份调法。由 [com.pagefold.reader.App] 接进来。 */
     @Volatile var tunes: com.pagefold.reader.field.VoiceTune? = null
 
-    /** 念过的段落放 files/clips。 */
+    /** 念过的段落放 files/clips。正式区：账本指着它，界面上看得见、删得掉。 */
     val cacheDir: File get() = File(ctx.filesDir, "clips").apply { mkdirs() }
+
+    /**
+     * 合成出来还没念的放应用缓存。
+     *
+     * 它不算「念过的段落」，界面上一个字都不列；放在 cache 下，计入应用缓存的大小，
+     * 系统空间不够时或用户「清除缓存」时可以一并清掉 —— 不然这些预取的音频
+     * 既不显示、也没人删得掉。念完那一刻才收进 [cacheDir]。
+     */
+    val pendingDir: File get() = File(ctx.cacheDir, "clips").apply { mkdirs() }
 
     /* 账本文件必须声明在 init 上面。 */
     private val ledgerFile = File(ctx.filesDir, "clips.json")
@@ -46,6 +56,14 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     /** 账本读不出来的那一次。读不出来和「本来就没有」必须分开：前者一旦被当成空账本写回去，所有条目的原文就永久没了 —— 音频还在，字没了。 */
     private var ledgerBroken = false
 
+    /** 账本只有一份。两三路合成同时记账、界面同时在读，读改写都要过这把锁。 */
+    private val bookLock = Any()
+
+    /** 记账不占播的那条线程。念完一句就往盘上写一遍账，写在主线程上就是每句卡一下。 */
+    private val house = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
+
     /**
      * 合成规则的版本。
      *
@@ -53,6 +71,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
      * 改参数（语速、音调、模型）不用抬：那些都进 key，旧条目自然不再命中。
      */
     private val CLIP_REV = 3
+
+    /** 本机引擎念一句最多等这么久。它不联网，正常一句一两秒。 */
+    private val SYS_WAIT = 15_000L
+
+    /** 旧账里由扫目录补出来的那一类条目写的字。念的时候没人记下原文，认不出是哪一段。 */
+    private val LEGACY_BLANK = "（早先念的一段，没留下字）"
 
     /** 把 rev 抬格前的音频清一次。 */
     private fun cleanOnce() = runCatching {
@@ -66,40 +90,123 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         mark.writeText(CLIP_REV.toString())
     }
 
-    /** 旧版留在 cache 下的文件，开机搬到新目录。 */
-    private fun migrateOldClips() = runCatching {
-        val old = File(ctx.cacheDir, "clips")
-        if (!old.isDirectory) return@runCatching
-        val now = cacheDir
-        old.listFiles()?.forEach { f ->
-            if (!f.isFile) return@forEach
-            // 半截的临时文件没有留的价值 —— 它本来就没写完。
-            if (f.name.contains(".part")) { f.delete(); return@forEach }
-            val dst = File(now, f.name)
-            if (dst.exists()) { f.delete(); return@forEach }
-            if (!f.renameTo(dst)) {
+    /**
+     * 清掉半截的本机引擎音频。
+     *
+     * 引擎一边合成一边往文件里写，写的时候 wav 头里还没有长度；正常的音频在这里都被
+     * [Wav.fix] 补成实际长度了，所以「头里没长度、文件又小」就是没写完的那一批。
+     * 只清一次，记在 clips.half 上。
+     */
+    private fun sweepHalf() = runCatching {
+        val mark = File(ctx.filesDir, "clips.half")
+        if (mark.exists()) return@runCatching
+        listOf(cacheDir, pendingDir).forEach { dir ->
+            dir.listFiles()?.forEach { f ->
+                if (!f.isFile || !f.name.endsWith(".wav", true)) return@forEach
+                if (f.length() >= 40_000L) return@forEach
+                if (half(f)) f.delete()
+            }
+        }
+        mark.writeText("1")
+    }
+
+    /**
+     * 念过、但当初没记下原文的那一批，挪进应用缓存。
+     *
+     * 它们原本由扫目录补进账本，字写的是那行占位。现在账本里不再列，
+     * 文件也不能就那么躺在 files/clips 里 —— 界面上看不见就等于永远删不掉。
+     * 挪到 cacheDir 之后，系统设置里的「清除缓存」能一并清掉。只做一次。
+     */
+    private fun parkLegacy(list: List<LedgerEntry>) = runCatching {
+        val mark = File(ctx.filesDir, "clips.parked")
+        if (mark.exists()) return@runCatching
+        val dir = File(ctx.cacheDir, "legacy-clips")
+        list.forEach { e ->
+            val orphan = e.text.isNullOrBlank() || e.text == LEGACY_BLANK
+            if (!orphan) return@forEach
+            val key = e.key.orEmpty()
+            if (key.isBlank() || key.contains('/') || key.contains('\\')) return@forEach
+            listOf("wav", "mp3").forEach { ext ->
+                val f = File(cacheDir, "$key.$ext")
+                if (!f.isFile) return@forEach
                 runCatching {
-                    f.inputStream().use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                    dir.mkdirs()
+                    val dst = File(dir, f.name)
+                    if (!f.renameTo(dst)) {
+                        f.copyTo(dst, true)
+                        f.delete()
+                    }
+                }
+            }
+        }
+        mark.writeText("1")
+    }
+
+    /**
+     * 盘上有、账上没有的那些音频，挪进应用缓存。
+     *
+     * 这就是「合成出来了但没等它念完」的那一批：预取的、备章的、停在半路点退出的。
+     * 它们不进账本，界面上一行都不列，留在 files/clips 里就永远没人删得掉。
+     * 账本读坏的那一次不搬 —— 那时候「账上没有」不代表没念过。只做一次。
+     */
+    private fun parkOrphans(list: List<LedgerEntry>) = runCatching {
+        if (ledgerBroken) return@runCatching
+        val mark = File(ctx.filesDir, "clips.orphan")
+        if (mark.exists()) return@runCatching
+        val known = list.mapTo(HashSet()) {
+            it.key.orEmpty().lowercase() + "." + it.ext.orEmpty().lowercase()
+        }
+        val dir = File(ctx.cacheDir, "legacy-clips")
+        cacheDir.listFiles()?.forEach { f ->
+            if (!f.isFile) return@forEach
+            if (f.name.contains(".part")) return@forEach
+            if (known.contains(f.name.lowercase())) return@forEach
+            runCatching {
+                dir.mkdirs()
+                val dst = File(dir, f.name)
+                if (!f.renameTo(dst)) {
+                    f.copyTo(dst, true)
                     f.delete()
                 }
             }
         }
-        old.delete()
+        mark.writeText("1")
+    }
+
+    /** 这个 wav 头里 data 的长度没写：0、负数，或者比文件本身还长。 */
+    private fun half(f: File): Boolean {
+        val head = runCatching {
+            f.inputStream().use { s -> ByteArray(minOf(64L, f.length()).toInt()).also { s.read(it) } }
+        }.getOrNull() ?: return false
+        if (head.size < 12) return true
+        if (head[0] != 'R'.code.toByte() || head[1] != 'I'.code.toByte()) return false
+        var i = 12
+        var guard = 0
+        while (i + 8 <= head.size && guard++ < 8) {
+            val id = String(head, i, 4, Charsets.US_ASCII)
+            val size = (head[i + 4].toInt() and 0xFF) or ((head[i + 5].toInt() and 0xFF) shl 8) or
+                ((head[i + 6].toInt() and 0xFF) shl 16) or ((head[i + 7].toInt() and 0xFF) shl 24)
+            if (id == "data") return size <= 0 || i + 8L + size > f.length()
+            if (size < 0 || i + 8 + size > head.size) return false
+            i += 8 + size + (size and 1)
+        }
+        return false
     }
 
     /** 清掉一小时前还没写完的临时文件。进程被杀、断电会留下这些半截货。 */
     private fun sweepParts() = runCatching {
-        val dir = cacheDir
         val cut = System.currentTimeMillis() - 3600_000L
-        dir.listFiles()?.forEach { f ->
-            if (f.isFile && f.name.contains(".part") && f.lastModified() < cut) f.delete()
+        listOf(cacheDir, pendingDir).forEach { dir ->
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.contains(".part") && f.lastModified() < cut) f.delete()
+            }
         }
     }
 
     init {
-        migrateOldClips()
         cleanOnce()
         sweepParts()
+        sweepHalf()
     }
 
     fun sync(s: Settings) {
@@ -181,11 +288,14 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
 
     fun cached(key: String): Clip? {
         for (ext in listOf("wav", "mp3")) {
-            val f = File(cacheDir, "$key.$ext")
-            if (!f.exists()) continue
-            if (sound(f)) return Clip(f, ext)
-            // 坏文件当场烧掉，让调用方重新合成，不留着反复播。
-            runCatching { f.delete() }
+            /* 先看还没念的那一份：命中就省一次合成。 */
+            for (dir in listOf(pendingDir, cacheDir)) {
+                val f = File(dir, "$key.$ext")
+                if (!f.exists()) continue
+                if (sound(f)) return Clip(f, ext)
+                /* 坏文件当场烧掉，让调用方重新合成，不留着反复播。 */
+                runCatching { f.delete() }
+            }
         }
         return null
     }
@@ -239,8 +349,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         /* wav 的头补齐：边合成边回的那几家，data 长度是占位，播放器按它解析会判坏。 */
         val body = if (ext == "wav") Wav.fix(bytes) else bytes
         if (body.size < 512) throw java.io.IOException("只回了 ${body.size} 字节，不像一段声音")
-        val dst = File(cacheDir, "$k.$ext")
-        val tmp = File(cacheDir, "$k." + System.nanoTime().toString(36) + ".part")
+        val dst = File(pendingDir, "$k.$ext")
+        val tmp = File(pendingDir, "$k." + System.nanoTime().toString(36) + ".part")
         try {
             tmp.writeBytes(body)
             if (!tmp.renameTo(dst)) {
@@ -278,8 +388,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         /* 把快慢烘进声音里，给「Quolune 当手机朗读引擎」那条路用。播放时由播放器设，不烘。 */
         bakeSpeed: Int = 100,
         bakePitch: Int = 100,
-        /* 这一段是试听，不属于书中正文。账本按它分两本。 */
-        trial: Boolean = false,
     ): Clip {
         sync(s)
         val k = key(s, v, text, r, bakeSpeed, bakePitch,
@@ -328,7 +436,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext, trial)
             }
             "minimax" -> {
                 // MiniMax：自己的口，音频回来是十六进制。
@@ -354,7 +461,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext, trial)
             }
             "bailian" -> {
                 // 阿里百炼：JSON 里给一个音频地址，要再下一次。
@@ -371,19 +477,16 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext, trial)
             }
             "system" -> {
-                /* 系统 TTS 自己往文件里写，不经过我们那层「先写临时名再改名」，所以它写的时候，另一路读到这里会看到一个只写了一半的 wav。 */
-                val tmp = File(cacheDir, "$k." + System.nanoTime().toString(36) + ".part.wav")
-                /* param 空会落回系统默认引擎；默认引擎若是本应用自己，就成了环。这一格不许空。 */
+                /* 引擎往临时名里写，写完才改名。param 空会落回系统默认引擎，[SysVoice.file] 拦自环。 */
+                val tmp = File(pendingDir, "$k." + System.nanoTime().toString(36) + ".part.wav")
                 val target = v.param.ifBlank { s.sysVoice }
-                sys.file(text, target, sp, pitchPct, tmp)
-                val dst = File(cacheDir, "$k.wav")
-                if (!tmp.renameTo(dst)) { tmp.copyTo(dst, true); tmp.delete() }
-                file = dst
+                sys.file(text, target, sp, pitchPct, tmp, waitMs = SYS_WAIT)
+                val bytes = runCatching { tmp.readBytes() }.getOrDefault(ByteArray(0))
+                runCatching { tmp.delete() }
+                file = land(k, "wav", bytes)
                 ext = "wav"
-                note(k, text, v.name, ext, trial)
             }
             "deepseek" -> {
                 // DeepSeek：自己的口，回来是 24 kHz 单声道 wav。没有语速这一格，快慢交给播放器。
@@ -396,7 +499,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "wav", bytes)
                 ext = "wav"
-                note(k, text, v.name, ext, trial)
             }
             "speech" -> {
                 // 标准口：POST /v1/audio/speech，直接回音频。
@@ -420,7 +522,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "mp3", bytes)
                 ext = "mp3"
-                note(k, text, v.name, ext, trial)
             }
             else -> {
                 // MiMo：音频在 chat/completions 的 message.audio 里
@@ -438,7 +539,6 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 )
                 file = land(k, "wav", bytes)
                 ext = "wav"
-                note(k, text, v.name, ext, trial)
             }
         }
         return Clip(file, ext)
@@ -470,6 +570,10 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             // 没有 key 的条目指不到任何文件，留着只会崩。key 里带分隔符的也不能要。
             val key = e.key.orEmpty()
             if (key.isBlank() || key.contains('/') || key.contains('\\')) return@forEach
+            /* 没有字的条目不上账：认不出是哪一段，也没法让他知道自己删的是什么。 */
+            if (e.text.isNullOrBlank()) return@forEach
+            /* 旧版扫目录补进来的那些，一并清掉。不看 voice —— 谁写的那行字都认不出是哪一段。 */
+            if (e.text == LEGACY_BLANK) return@forEach
             val ext = e.ext.orEmpty().lowercase().ifBlank { "wav" }
             if (ext != "wav" && ext != "mp3") return@forEach
             out.add(
@@ -543,6 +647,9 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             ledgerMem = empty
             return empty
         }
+        /* 先挪文件，再剔条目 —— 剔完就不知道是哪几个文件了。 */
+        parkLegacy(parsed)
+        parkOrphans(parsed)
         val list = ledgerClean(parsed)
         ledgerMem = list
         // 剔掉过东西就立刻写回：坏行留在盘上，每开一次应用都要再洗一遍。
@@ -571,6 +678,49 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         ledgerWrite(safe)
     }
 
+    /**
+     * 一段念完了，记账。
+     *
+     * 合成出来还没念的不进「念过的段落」—— 预取的几段、缓存备下的整本，
+     * 都不该出现在他念过的那本账里。
+     *
+     * @param trial 这一条是试听留下的，不算书里的正文
+     */
+    fun notePlayed(clip: Clip, text: String, voice: String, trial: Boolean = false) {
+        val ext = clip.ext
+        house.launch {
+            /* 搬与记账在同一把锁里：中间被人当成「盘上有、账上没有」搬去缓存就错了。 */
+            synchronized(bookLock) {
+                val kept = keep(clip) ?: return@launch
+                note(kept.file.nameWithoutExtension.lowercase(), text, voice, ext, trial)
+            }
+        }
+    }
+
+    /**
+     * 把念完的音频从缓存区收进正式区。
+     *
+     * 文件已经不在（系统清了缓存）就返回 null，那一段不记账 —— 账上有字、盘上没声的条目
+     * 点开只会是空的。
+     */
+    private fun keep(clip: Clip): Clip? {
+        val f = clip.file
+        if (!f.isFile) return null
+        val here = runCatching { f.parentFile?.canonicalPath == cacheDir.canonicalPath }
+            .getOrDefault(false)
+        if (here) return clip
+        val dst = File(cacheDir, f.name)
+        if (!dst.isFile && !f.renameTo(dst)) {
+            runCatching {
+                f.copyTo(dst, true)
+                f.delete()
+            }
+        }
+        if (!dst.isFile) return null
+        runCatching { if (f.exists()) f.delete() }
+        return Clip(dst, clip.ext)
+    }
+
     /** 记一段念过的。 */
     private fun note(key: String, text: String, voice: String, ext: String, trial: Boolean) {
         val list = ledgerLoad()
@@ -590,11 +740,14 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         ledgerSave(list)
     }
 
-    /** 念过的段落，新的在前。只扫一遍目录：盘上有账上没有的补进来，账上有盘上没有的销掉。 */
-    fun ledger(): List<LedgerEntry> {
+    /**
+     * 念过的段落，新的在前。
+     *
+     * 只列账上有字的那几条。盘上有、账上没有的是合成出来还没念的（预取的、备章的），
+     * 不在这本账里；账上有、盘上没有的销掉。
+     */
+    fun ledger(): List<LedgerEntry> = synchronized(bookLock) {
         val list = ledgerLoad()
-        val known = list.mapTo(HashSet()) { it.key }
-        var dirty = false
         /* key.ext → 文件。一千五百段时逐条 exists() 是三千次 stat，一次扫目录就够。 */
         val onDisk = HashMap<String, File>(2048)
         runCatching {
@@ -605,45 +758,32 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 if (dot <= 0) return@forEach
                 val ext = name.substring(dot + 1).lowercase()
                 if (ext != "wav" && ext != "mp3") return@forEach
-                // 临时的半截文件不是一段念过的书，别让它进账本。
+                // 临时的半截文件不是一段念过的书。
                 if (name.contains(".part")) return@forEach
-                val key = name.substring(0, dot)
-                onDisk[key.lowercase() + "." + ext] = f
-                if (f.length() <= 512) return@forEach
-                if (!known.add(key)) return@forEach
-                list.add(
-                    LedgerEntry(
-                        key = key,
-                        text = "（早先念的一段，没留下字）",
-                        voice = "",
-                        at = f.lastModified(),
-                        ext = ext,
-                    )
-                )
-                dirty = true
+                onDisk[name.substring(0, dot).lowercase() + "." + ext] = f
             }
         }
         val alive = list.filter { e ->
             val f = onDisk[e.key.lowercase() + "." + e.ext.lowercase()] ?: return@filter false
             f.length() > 512
         }
-        /* 账本本身读坏了的时候，只能用扫目录扫出来的这份临时给界面看，不能写回盘上 —— 那等于拿一千条「没留下字」把原文全替了。 */
-        if (!ledgerBroken && (dirty || alive.size != list.size)) ledgerSave(alive)
-        return alive.sortedByDescending { it.at }
+        /* 账本读坏过就不写回：读坏时手里的这份是空的，写回去等于把原文全抹了。 */
+        if (!ledgerBroken && alive.size != list.size) ledgerSave(alive)
+        alive.sortedByDescending { it.at }
     }
 
     fun sizeOf(key: String, ext: String): Long =
         File(cacheDir, key + "." + ext).let { if (it.exists()) it.length() else 0L }
 
     /** 删掉一段念过的。文件先走，账随后销。 */
-    fun drop(key: String): Boolean {
+    fun drop(key: String): Boolean = synchronized(bookLock) {
         var gone = false
         listOf("wav", "mp3").forEach { ext ->
             val f = File(cacheDir, key + "." + ext)
             if (f.exists() && f.delete()) gone = true
         }
         ledgerSave(ledgerLoad().filterNot { it.key == key })
-        return gone
+        gone
     }
 
     /**
@@ -652,7 +792,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
 * @param onTick 每删一批报一次「删到第几条」。给界面画进度用；回调在调用线程上跑。
 * @return 真删掉文件的条数
 */
-    fun dropAll(keys: Collection<String>, onTick: ((Int) -> Unit)? = null): Int {
+    fun dropAll(keys: Collection<String>, onTick: ((Int) -> Unit)? = null): Int =
+        synchronized(bookLock) {
         if (keys.isEmpty()) return 0
         var n = 0
         var gone = 0
@@ -666,8 +807,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         }
         ledgerSave(ledgerLoad().filterNot { it.key in keys })
         onTick?.invoke(n)
-        return gone
-    }
+        gone
+        }
 
     fun usage(): Pair<Long, Int> {
         val files = cacheDir.listFiles() ?: return 0L to 0
@@ -677,12 +818,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return total to n
     }
 
-    fun clearAll(): Int {
+    fun clearAll(): Int = synchronized(bookLock) {
         ledgerSave(emptyList())
         val files = cacheDir.listFiles() ?: return 0
         var n = 0
         files.forEach { if (it.isFile && it.delete()) n++ }
-        return n
+        n
     }
 
     fun prune(maxBytes: Long) {

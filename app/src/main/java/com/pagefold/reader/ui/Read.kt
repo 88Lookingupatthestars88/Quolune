@@ -506,6 +506,19 @@ private class Laid(
         return (sa[lo] + (r - ss[lo] - shift)).coerceAtLeast(0)
     }
 
+    /**
+     * 排好的那串字里的位置 → 这一章里的第几个字。
+     *
+     * 存档、[Feed]、切句用的都是章内偏移；[abs] 给的是全书里的位置。两个别混 ——
+     * 混过一次：眼睛记的是全书位置，写存档那一步当成章内偏移，除第一章外全被夹到章末，
+     * 再进来就停在那一章最后一页。
+     */
+    fun relIn(r: Int): Int {
+        val base = a.chStart.getOrElse(ch) { 0 }
+        val end = a.chEnd.getOrElse(ch) { base }
+        return (abs(r) - base).coerceIn(0, (end - base).coerceAtLeast(0))
+    }
+
     /** 第一个位置 ≥ [r] 的空行下标（[gaps] 是递增的，二分）。 */
     private fun gapFrom(r: Int): Int {
         var lo = 0
@@ -887,7 +900,14 @@ private fun sigOf(style: TextStyle, w: Int, h: Int, paraGap: Int): String =
 // ───────────────────────── 阅读页 ─────────────────────────
 
 @Composable
-fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit) {
+fun ReadScreen(
+    book: BookMeta,
+    settings: Settings,
+    app: App,
+    onBack: () -> Unit,
+    /** 落好位之后直接开口念。只做一次。 */
+    autoPlay: Boolean = false,
+) {
     val s = LocalSkin.current
     val scope = rememberCoroutineScope()
     val measurer = rememberTextMeasurer()
@@ -1393,6 +1413,24 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
         runCatching { saveAt(a, c0, startOffset.coerceAtLeast(0)) }
     }
 
+    /* 「接着听」那颗圆钮进来的：落在存档那一句，然后直接开口。 */
+    var kicked by remember(book.id) { mutableStateOf(false) }
+    LaunchedEffect(armed, atlas) {
+        if (!autoPlay || kicked) return@LaunchedEffect
+        if (!armed) return@LaunchedEffect
+        if (atlas == null) return@LaunchedEffect
+        /* 这一格不能进 key：一改就从外面把这一场取消掉，念到一半被掐。 */
+        kicked = true
+        feed.rate = rate
+        val st = BookPlayer.flow.value
+        if (st.total > 0 && BookPlayer.owns(bookNow.title)) {
+            /* 手上这一场就是这本书：接着刚才那里念。 */
+            BookPlayer.holder?.resumeNow()
+        } else {
+            beginAt(app, feed, ch, startOffset.coerceAtLeast(0), effNow, bookNow.tuneJson)
+        }
+    }
+
     /* 换翻法：左右翻 ↔ 上下滚。 */
     var lastTurn by remember { mutableStateOf(effNow.turn) }
     LaunchedEffect(effNow.turn) {
@@ -1531,18 +1569,19 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                             if (!armed) return@LaunchedEffect
                             if (restoreAt >= 0) return@LaunchedEffect
                             val pg = cache.pages(ch).getOrNull(pi) ?: return@LaunchedEffect
-                            val abs0 = cache.laid(ch).abs(pg.start)
+                            /* 章内偏移：存档、播放器、切句用的是同一个单位。 */
+                            val rel0 = cache.laid(ch).relIn(pg.start)
                             val base = a.chStart.getOrElse(ch) { 0 }
                             /* 记一份给「退出这一页」用：那一格读不到 Compose 的当前值。 */
                             eye.on = true
                             eye.ch = ch
-                            eye.rel = abs0
+                            eye.rel = rel0
                             eye.len = a.text.length.coerceAtLeast(1)
-                            eye.progress = ((base + abs0).coerceIn(0, a.text.length)).toFloat() / eye.len
+                            eye.progress = ((base + rel0).coerceIn(0, a.text.length)).toFloat() / eye.len
                             eye.no = chNos.getOrElse(ch) { 0 }
                             eye.name = chapters.getOrNull(ch)?.title?.trim().orEmpty()
                             delay(500)
-                            withContext(Dispatchers.IO) { saveAt(a, ch, abs0) }
+                            withContext(Dispatchers.IO) { saveAt(a, ch, rel0) }
                         }
 
                         LaunchedEffect(pagesNow.size) { pageCount = pagesNow.size.coerceAtLeast(1) }
@@ -1586,13 +1625,13 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                                 // 还没落稳就记，会把「章尾」当成读到的位置。
                                 if (restoreAt >= 0) return@collectLatest
                                 val pg = pagesNow.getOrNull(p0) ?: return@collectLatest
-                                val abs0 = laidNow.abs(pg.start)
+                                val rel0 = laidNow.relIn(pg.start)
                                 eye.on = true
                                 eye.ch = ch
-                                eye.rel = abs0
+                                eye.rel = rel0
                                 eye.len = a.text.length.coerceAtLeast(1)
                                 eye.progress =
-                                    ((a.chStart.getOrElse(ch) { 0 } + abs0).coerceIn(0, a.text.length))
+                                    ((a.chStart.getOrElse(ch) { 0 } + rel0).coerceIn(0, a.text.length))
                                         .toFloat() / eye.len
                                 eye.no = chNos.getOrElse(ch) { 0 }
                             eye.name = chapters.getOrNull(ch)?.title?.trim().orEmpty()
@@ -1942,7 +1981,7 @@ fun ReadScreen(book: BookMeta, settings: Settings, app: App, onBack: () -> Unit)
                     if (a2 != null && cc != null) {
                         val pgs = cc.pages(ch)
                         val pg = pgs.getOrNull(target.coerceIn(0, pgs.size - 1))
-                        if (pg != null) charAt = cc.laid(ch).abs(pg.start)
+                        if (pg != null) charAt = cc.laid(ch).relIn(pg.start)
                     }
                     page = target
                     wantPage = -1
@@ -2312,11 +2351,16 @@ private suspend fun beginAt(
     rel: Int,
     s: Settings,
     tune: String,
-) = runCatching {
-    beginAtUnsafe(app, feed, ch, rel, s, tune)
-}.onFailure {
-    /* 走到这儿是切句或取章出了问题，不是念不出来。 */
-    BookPlayer.say("这一章还没切好句，先翻两页再开口")
+) {
+    try {
+        beginAtUnsafe(app, feed, ch, rel, s, tune)
+    } catch (e: CancellationException) {
+        /* 换章、退出去都会 cancel 这一场。取消不是「切句失败」，别报那句话。 */
+        throw e
+    } catch (e: Throwable) {
+        /* 走到这儿是切句或取章出了问题，不是念不出来。 */
+        BookPlayer.say("这一章还没切好句，先翻两页再开口")
+    }
 }
 
 private suspend fun beginAtUnsafe(

@@ -170,12 +170,12 @@ fun VoiceScreen(
             hearing = v.id
             /* 试听念手上这份，不读上次存下的。 */
             val live = if (v.id == currentId) draft else null
+            val line = "这一段，念给你听。"
             val res = withContext(Dispatchers.IO) {
                 runCatching {
-                    val line = "这一段，念给你听。"
                     val mood = live?.mood?.ifBlank { s.style } ?: s.style
                     val read = Cue.of(line, null, null, mood, !s.cue)
-                    app.synth.make(s, v, line, read, one = live, trial = true)
+                    app.synth.make(s, v, line, read, one = live)
                 }
             }
             hearing = null
@@ -187,11 +187,12 @@ fun VoiceScreen(
             }
             // 播没播上、播完没有，由 Audition 说了算；这里只报错。
             val mute = live ?: runCatching { app.vtune.of(v.id) }.getOrNull()
-            if (!Audition.play(
+            if (Audition.play(
                     v.id, clip.file.absolutePath,
                     mute?.speed ?: 100, mute?.pitch ?: 100,
                 )
-            ) msg = "声音存下来了，播放器解不开这一段"
+            ) app.synth.notePlayed(clip, line, v.name, trial = true)
+            else msg = "声音存下来了，播放器解不开这一段"
         }
     }
 
@@ -1633,12 +1634,14 @@ private fun VoiceTuneSheet(
                 runCatching {
                     val mood = cur.mood.ifBlank { s.style }
                     val read = Cue.of(line, null, null, mood, !s.cue)
-                    app.synth.make(s, v, line, read, one = cur, trial = true)
+                    app.synth.make(s, v, line, read, one = cur)
                 }.getOrNull()
             }
             hearing = false
             if (clip == null) return@launch
-            Audition.play(v.id, clip.file.absolutePath, cur.speed, cur.pitch)
+            if (Audition.play(v.id, clip.file.absolutePath, cur.speed, cur.pitch)) {
+                app.synth.notePlayed(clip, line, v.name, trial = true)
+            }
         }
     }
 

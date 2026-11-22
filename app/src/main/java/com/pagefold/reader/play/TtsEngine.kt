@@ -18,6 +18,12 @@ class TtsEngine : TextToSpeechService() {
         const val RATE = 24000
         const val MAX_TOTAL = 4000
         const val MAX_ONE = 240
+
+        /** 等第一声最多等这么久。调用方等不起，等到最后只会弹一个失败。 */
+        const val FIRST_MS = 18_000L
+
+        /** 出声之后，每往下一段重新计时。连着这么久没出下一段，就收尾。 */
+        const val NEXT_MS = 30_000L
     }
 
     private val app: App get() = application as App
@@ -86,10 +92,13 @@ class TtsEngine : TextToSpeechService() {
     private fun voiceNameOf(r: SynthesisRequest): String? =
         runCatching { r.voiceName }.getOrNull()?.takeIf { it.isNotBlank() }
 
-    /** 其他应用调用时可用的话音：与书里能挑的一致，含本机引擎那几副。 */
+    /** 其他应用调用时可用的话音：与书里能挑的一致，含本机引擎那几副，不含本应用自己。 */
     private fun pool(): List<Voice> {
         val s = app.field.now
+        /* 自己念自己会死在这条路上：那一句永远等不到声音，只能等满超时。 */
+        val me = com.pagefold.reader.field.Engines.sysId(packageName)
         val mine = Catalog.ours(s.engines, app.box.custom())
+            .filterNot { it.engine == me || it.engine.startsWith("$me#") }
         return mine.ifEmpty { Catalog.MIMO }
     }
 
@@ -124,6 +133,7 @@ class TtsEngine : TextToSpeechService() {
         val want = voiceNameOf(request)?.removePrefix("tl:")
         val v = voices.firstOrNull { it.id == want }
             ?: Catalog.byName(voices, s.defaultVoice)
+            ?: voices.firstOrNull { it.kind == "system" }
             ?: voices.firstOrNull()
         if (v == null) {
             runCatching { callback.error() }
@@ -139,13 +149,15 @@ class TtsEngine : TextToSpeechService() {
             if (it in 20..400) it else s.pitch
         }
 
+        var until = System.currentTimeMillis() + FIRST_MS
         var fed = 0
-        var failed = 0
         val cap = runCatching { callback.maxBufferSize }.getOrDefault(4096).coerceAtLeast(2048)
 
         try {
             for (piece in chunk(full)) {
                 if (stopped) return
+                /* 已经超时就收尾。没出过声的话，下面会照实报失败。 */
+                if (System.currentTimeMillis() > until) break
                 val reading = Cue.of(piece, null, null, s.style, !s.cue)
                 val dark = if (v.reactsToStyle) reading else null
                 val clip = runCatching {
@@ -156,15 +168,9 @@ class TtsEngine : TextToSpeechService() {
                         )
                     }
                 }.getOrNull()
-                if (clip == null) {
-                    failed++
-                    continue
-                }
+                if (clip == null) continue
                 val raw = runCatching { Pcm.read(clip.file) }.getOrNull()
-                if (raw == null || raw.pcm.isEmpty()) {
-                    failed++
-                    continue
-                }
+                if (raw == null || raw.pcm.isEmpty()) continue
                 val pcm = to24k(raw)
                 var off = 0
                 while (off < pcm.size) {
@@ -176,6 +182,9 @@ class TtsEngine : TextToSpeechService() {
                     off += n
                     fed += n
                 }
+                runCatching { app.synth.notePlayed(clip, piece, v.name) }
+                /* 出声了。后面每段各算各的，一整段长文不该被总时限砍断。 */
+                until = System.currentTimeMillis() + NEXT_MS
                 // 句间留一点，别像机器播报
                 if (reading.pauseMs > 0) {
                     val silence = ByteArray(RATE / 1000 * reading.pauseMs * 2)

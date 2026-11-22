@@ -148,6 +148,8 @@ private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
 private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
     var tab by remember { mutableIntStateOf(if (jumpVoice) 1 else s.homeTab.coerceIn(0, 4)) }
     var book by remember { mutableStateOf<BookMeta?>(null) }
+    /** 进书之后直接开口念。「接着听」那颗圆钮点的是这条。 */
+    var autoPlay by remember { mutableStateOf(false) }
 
     // 每页一个滚动位置。rememberLazyListState 内部是 rememberSaveable，
     // 所以切页回来、甚至转屏之后，位置都还在。
@@ -172,13 +174,19 @@ private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
             settings = s
         )
         if (opened != null) {
-            ReadScreen(book = opened, settings = s, app = app, onBack = { book = null })
+            ReadScreen(
+                book = opened, settings = s, app = app, autoPlay = autoPlay,
+                onBack = { book = null; autoPlay = false },
+            )
         } else {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxWidth().weight(1f).statusBarsPadding()) {
                     // 四个页各自记住自己滑到哪儿。放这一层，切页时组合被销毁也不会丢。
                     when (tab) {
-                        0 -> LibraryScreen(s, app, grid = shelf, open = { book = it })
+                        0 -> LibraryScreen(
+                            s, app, grid = shelf,
+                            open = { b, play -> book = b; autoPlay = play },
+                        )
                         1 -> VoiceScreen(s, app, list = scroll[0])
                         2 -> PreviewScreen(s, app, list = scroll[1])
                         4 -> AboutScreen(s, app, list = scroll[3])
