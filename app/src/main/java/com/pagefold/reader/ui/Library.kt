@@ -838,7 +838,7 @@ private fun importBook(app: App, uri: Uri): Pair<Boolean, String?> {
             return false to "文件是空的"
         }
         val parsed = Parse.load(dst)
-        if (parsed.text.length < 100) {
+        if (parsed.chars < 100) {
             dst.delete()
             return false to "里头没有正文，可能是加密的，或者整本都是图"
         }
@@ -851,7 +851,7 @@ private fun importBook(app: App, uri: Uri): Pair<Boolean, String?> {
             author = author,
             path = dst.absolutePath,
             bytes = dst.length(),
-            chars = Parse.countChars(parsed.text),
+            chars = parsed.chars,
             chapters = parsed.chapters.size,
             addedAt = System.currentTimeMillis(),
             openedAt = 0L,

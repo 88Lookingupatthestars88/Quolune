@@ -98,7 +98,7 @@ data class Rule(
 }
 
 /** 数人算法的版本。改了判据就把这个数加一，老书进书架时会重数。 */
-const val NAME_VER = 11
+const val NAME_VER = 12
 
 data class CastBook(
     val v: Int = 4,

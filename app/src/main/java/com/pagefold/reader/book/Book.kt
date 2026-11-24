@@ -98,6 +98,8 @@ class Shelf(ctx: Context) {
         if (files.isEmpty()) return emptyList()
         val out = ArrayList<BookMeta>(files.size)
         files.forEach { f ->
+            /* 书架是重建出来的，编码也得在这时候定下来，否则书名读出来是乱码。 */
+            runCatching { Codec.rewrite(f) }
             /* 文件名就是 id（收书时是 id.ext 这么起的），拿它跟旧存档、句库、签子对得上。 */
             val id = f.name.substringBeforeLast('.')
             if (id.isBlank()) return@forEach
@@ -307,6 +309,9 @@ class Shelf(ctx: Context) {
     fun setChapters(id: String, n: Int): List<BookMeta> {
         val m = find(id) ?: return all()
         if (n <= 0 || m.chapters == n) return all()
+        /* 这次切出来全是自动分块，说明书里的标题一个都没认出来。别拿它盖掉真账。 */
+        val cut = Chapters.cached(ctx, id)
+        if (cut != null && cut.isNotEmpty() && cut.all { it.auto }) return all()
         return update(m.copy(chapters = n))
     }
 
@@ -338,11 +343,23 @@ class Shelf(ctx: Context) {
         /* 目录只读落盘那份，不读整本正文。 */
         val list = Chapters.cached(ctx, id) ?: return ""
         val c = list.getOrNull(ch) ?: return ""
-        val from = c.start.coerceAtLeast(0)
-        val to = c.end.coerceAtLeast(from)
-        val out = StringBuilder(minOf(to - from, 1 shl 18) + 16)
+        val f = File(bm.path)
+        if (!f.exists()) return ""
+
+        /* 有字节表就直接跳过去，一章只读它自己那几个字节。 */
+        val off = Chapters.bytes(ctx, id)
+        if (off != null && ch < off.size) {
+            val from = off[ch].coerceIn(0L, f.length())
+            val to = (if (ch + 1 < off.size) off[ch + 1] else f.length()).coerceIn(from, f.length())
+            return slice(f, from, to)
+        }
+
+        /* 没有字节表：按字符偏移从头解码。老索引走这条路。 */
+        val fromC = c.start.coerceAtLeast(0)
+        val toC = c.end.coerceAtLeast(fromC)
+        val out = StringBuilder(minOf(toC - fromC, 1 shl 18) + 16)
         runCatching {
-            File(bm.path).inputStream().use { ins ->
+            f.inputStream().use { ins ->
                 val r = java.io.InputStreamReader(ins, Charsets.UTF_8)
                 val buf = CharArray(1 shl 15)
                 var pos = 0
@@ -351,17 +368,26 @@ class Shelf(ctx: Context) {
                     if (n <= 0) break
                     val a = pos
                     val b = pos + n
-                    if (b > from && a < to) {
-                        val s = (from - a).coerceAtLeast(0)
-                        val e = (to - a).coerceAtMost(n)
+                    if (b > fromC && a < toC) {
+                        val s = (fromC - a).coerceAtLeast(0)
+                        val e = (toC - a).coerceAtMost(n)
                         if (e > s) out.append(buf, s, e - s)
                     }
                     pos = b
-                    if (pos >= to) break
+                    if (pos >= toC) break
                 }
             }
         }
         return out.toString()
+    }
+
+    /** 从文件里切出 [from, to) 这段 UTF-8 字节。切点必须落在字符边界上。 */
+    private fun slice(f: File, from: Long, to: Long): String {
+        val n = (to - from).coerceIn(0L, 1L shl 26).toInt()
+        if (n <= 0) return ""
+        val b = ByteArray(n)
+        java.io.RandomAccessFile(f, "r").use { it.seek(from); it.readFully(b) }
+        return String(b, Charsets.UTF_8)
     }
 
     /** 目录建成没有。台账要按这个说一句「先进这本书」。 */
@@ -399,8 +425,14 @@ class Shelf(ctx: Context) {
         File(ctx.filesDir, "covers").apply { mkdirs() }
 
 
+    /** 整本正文。第一件事是把文件落成 UTF-8：导入时判对的编码，之前没传给这里。 */
     fun read(id: String): String? {
         val meta = all().firstOrNull { it.id == id } ?: return null
-        return runCatching { File(meta.path).readText() }.getOrNull()
+        val f = File(meta.path)
+        if (!f.exists()) return null
+        val done = runCatching { Codec.rewrite(f) }.getOrNull()
+        /* 文件被重写过，字符偏移全变了，目录得作废重切。 */
+        if (done != null && done.changed) Chapters.drop(ctx, id)
+        return runCatching { f.readText() }.getOrNull()
     }
 }

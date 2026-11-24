@@ -29,7 +29,7 @@ object Lines {
     /**
 * 句库的版本。认人的判据、存法一改就加一 —— 老书进书架会重扫。
 */
-    const val LINES_VER = 12
+    const val LINES_VER = 13
 
     /** 句库改过几次。界面拿它当 remember 的键：重扫完、删书、补建都要重算一次「没认出还有几句」。 */
     val tick = androidx.compose.runtime.mutableIntStateOf(0)
