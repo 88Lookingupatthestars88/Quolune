@@ -40,11 +40,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     val cacheDir: File get() = File(ctx.filesDir, "clips").apply { mkdirs() }
 
     /**
-     * 合成出来还没念的放应用缓存。
-     *
-     * 它不算「念过的段落」，界面上一个字都不列；放在 cache 下，计入应用缓存的大小，
-     * 系统空间不够时或用户「清除缓存」时可以一并清掉 —— 不然这些预取的音频
-     * 既不显示、也没人删得掉。念完那一刻才收进 [cacheDir]。
+     * 合成出来还没念的放应用缓存：不列账本，用户清缓存时能一并清掉。
+     * 念完那一刻才收进 [cacheDir]。
      */
     val pendingDir: File get() = File(ctx.cacheDir, "clips").apply { mkdirs() }
 
@@ -68,9 +65,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
      * 合成规则的版本。
      *
      * 抬一格会清空 clips 目录与账本 —— 只有「同一个 key 会产出不一样的声音」才抬。
-     * 改参数（语速、音调、模型）不用抬：那些都进 key，旧条目自然不再命中。
+     * 改参数（语速、音调、模型）不用抬：那些都进 key。
      */
     private val CLIP_REV = 3
+
+    /** 电平归一化的版本。只有把声音改成另一个电平才抬。 */
+    private val LEVEL = 1
 
     /** 本机引擎念一句最多等这么久。它不联网，正常一句一两秒。 */
     private val SYS_WAIT = 15_000L
@@ -91,11 +91,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     }
 
     /**
-     * 清掉半截的本机引擎音频。
-     *
-     * 引擎一边合成一边往文件里写，写的时候 wav 头里还没有长度；正常的音频在这里都被
-     * [Wav.fix] 补成实际长度了，所以「头里没长度、文件又小」就是没写完的那一批。
-     * 只清一次，记在 clips.half 上。
+     * 清掉半截的本机引擎音频。引擎边合成边写，写的时候 wav 头里没有长度，
+     * 正常音频都被 [Wav.fix] 补过，所以「头里没长度、文件又小」就是没写完的。只清一次。
      */
     private fun sweepHalf() = runCatching {
         val mark = File(ctx.filesDir, "clips.half")
@@ -111,11 +108,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     }
 
     /**
-     * 念过、但当初没记下原文的那一批，挪进应用缓存。
-     *
-     * 它们原本由扫目录补进账本，字写的是那行占位。现在账本里不再列，
-     * 文件也不能就那么躺在 files/clips 里 —— 界面上看不见就等于永远删不掉。
-     * 挪到 cacheDir 之后，系统设置里的「清除缓存」能一并清掉。只做一次。
+     * 念过、但没记下原文的那一批，挪进应用缓存。账本里不列这些，
+     * 留在 files/clips 里界面上看不见就永远删不掉。只做一次。
      */
     private fun parkLegacy(list: List<LedgerEntry>) = runCatching {
         val mark = File(ctx.filesDir, "clips.parked")
@@ -143,11 +137,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     }
 
     /**
-     * 盘上有、账上没有的那些音频，挪进应用缓存。
-     *
-     * 这就是「合成出来了但没等它念完」的那一批：预取的、备章的、停在半路点退出的。
-     * 它们不进账本，界面上一行都不列，留在 files/clips 里就永远没人删得掉。
-     * 账本读坏的那一次不搬 —— 那时候「账上没有」不代表没念过。只做一次。
+     * 盘上有、账上没有的音频，挪进应用缓存。账本读坏的那一次不搬。只做一次。
      */
     private fun parkOrphans(list: List<LedgerEntry>) = runCatching {
         if (ledgerBroken) return@runCatching
@@ -264,9 +254,8 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             append(',').append(vt.temp).append(',').append(vt.boost).append(',').append(vt.norm)
         }
         if (r != null) {
-            append('/').append(r.kind.name).append(',').append(r.rate)
-            append(',').append(r.pitch).append(',').append(r.volume)
-            // 调门也进指纹。
+            /* 语速不进指纹：它在播放器上设，同一段音频能按任何速度放。 */
+            append('/').append(r.pitch).append(',').append(r.volume)
             append('/').append(r.style)
         }
     }
@@ -280,8 +269,9 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         bakePitch: Int = 100,
         extra: String = "",
     ): String {
-        /* rev 进 key：合成规则一变，旧音频不再被复用。 */
-        val raw = fingerprint(s, v, r, bakeSpeed, bakePitch) + "|" + text + "|r=$CLIP_REV|" + extra
+        /* rev 与 LEVEL 都进 key，抬了就换用新音频。抬 CLIP_REV 会连账本一起清掉，
+         * 那是另一件事。 */
+        val raw = fingerprint(s, v, r, bakeSpeed, bakePitch) + "|" + text + "|r=$CLIP_REV|l=$LEVEL|" + extra
         val md = MessageDigest.getInstance("MD5").digest(raw.toByteArray())
         return md.joinToString("") { "%02x".format(it) }
     }
@@ -344,10 +334,14 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         return true
     }
 
-    /** 把一段字节落成缓存文件。六个服务分支都走这里，别处不要再自己拼临时文件名。 */
-    private fun land(k: String, ext: String, bytes: ByteArray): File {
+    /**
+     * 把一段字节落成缓存文件。六个服务分支都走这里，别处不要再自己拼临时文件名。
+     *
+     * @param gain wav 的电平，百分数。各家回来的响度差得远，这里拉齐到同一个基准再按它增减。
+     */
+    private fun land(k: String, ext: String, bytes: ByteArray, gain: Int = 100): File {
         /* wav 的头补齐：边合成边回的那几家，data 长度是占位，播放器按它解析会判坏。 */
-        val body = if (ext == "wav") Wav.fix(bytes) else bytes
+        val body = if (ext == "wav") Wav.level(Wav.fix(bytes), gain) else bytes
         if (body.size < 512) throw java.io.IOException("只回了 ${body.size} 字节，不像一段声音")
         val dst = File(pendingDir, "$k.$ext")
         val tmp = File(pendingDir, "$k." + System.nanoTime().toString(36) + ".part")
@@ -371,17 +365,15 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
     /**
 * 合成一段。先查缓存。
 *
-* @param r      段落判定结果（旁白/对白/耳语…）
-* @param before 上文原句，给 MiMo 做语气参考
-* @param after  下文原句
+* @param r     这段怎么念（旁白/对白/耳语…）
+* @param one   一次性的调法。试听传这个：听到的是手上还没存的数，不是上一次存下的。
+* @param bakeSpeed 把快慢烘进声音里，给「Quolune 当手机朗读引擎」那条路用。
 */
     suspend fun make(
         s: Settings,
         v: Voice,
         text: String,
         r: Reading?,
-        before: String? = null,
-        after: String? = null,
         force: Boolean = false,
         /* 一次性的调法。试听传这个：听到的是手上还没存的数，不是上一次存下的。 */
         one: com.pagefold.reader.field.Vt? = null,
@@ -395,11 +387,12 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
         /* force = 试听时用：绕开缓存，逼它真去问一次。 */
         if (!force) cached(k)?.let { return it }
 
-        /* 语速音调不进合成：播放器放的时候设，换速度不必重念。 */
+        /* 语速不进合成：播放器放的时候设，换速度不必重念。音高改不了，只能进合成。 */
         val mine = one ?: tunes?.let { t -> if (t.has(v.id)) t.of(v.id) else null }
         val own = mine ?: com.pagefold.reader.field.Vt(volume = 100, mood = "")
         val sp = bakeSpeed.coerceIn(50, 300)
-        val pitchPct = bakePitch.coerceIn(50, 200)
+        /* 这一块的语气音高叠在嗓源自己那一格上。播放器改不了音高，只能烘进声音里。 */
+        val pitchPct = (bakePitch + (r?.pitch ?: 0)).coerceIn(50, 200)
         val volPct = own.volume.coerceIn(50, 200)
 
         val ext: String
@@ -485,7 +478,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                 sys.file(text, target, sp, pitchPct, tmp, waitMs = SYS_WAIT)
                 val bytes = runCatching { tmp.readBytes() }.getOrDefault(ByteArray(0))
                 runCatching { tmp.delete() }
-                file = land(k, "wav", bytes)
+                file = land(k, "wav", bytes, volPct)
                 ext = "wav"
             }
             "deepseek" -> {
@@ -497,13 +490,11 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                     text = text,
                     voice = v.param.ifBlank { v.name },
                 )
-                file = land(k, "wav", bytes)
+                file = land(k, "wav", bytes, volPct)
                 ext = "wav"
             }
             "speech" -> {
-                // 标准口：POST /v1/audio/speech，直接回音频。
-                // 标准口。没有这一支的话，只有小米那套 chat/completions 可用，
-                // 填了 OpenAI 的地址和 tts-1 就是一个字也念不出来。
+                // 标准口：POST /v1/audio/speech，直接回音频。没有这一支，填 OpenAI 的地址也念不出声。
                 val e = route(s, v) ?: throw java.io.IOException("这副嗓源不在了，去定音里重新挑一副")
                 val model = e.modelOr()
                 val silicon = com.pagefold.reader.field.Caps.isSilicon(model)
@@ -537,7 +528,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
                     pitch = pitchPct,
                     mood = moodOf(s, v, r),
                 )
-                file = land(k, "wav", bytes)
+                file = land(k, "wav", bytes, volPct)
                 ext = "wav"
             }
         }
@@ -553,7 +544,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             val t = s.style.trim()
             return if (t == "平静" || t == "无") "" else t.take(4)
         }
-        return Cue.say(r, r.style.ifBlank { s.style })
+        return Cue.say(r.style.ifBlank { s.style })
     }
 
     /** 百分数的音调 → 各家那个整数刻度。MiniMax 和火山都是 −12…12，0 是原调。 */
@@ -572,7 +563,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             if (key.isBlank() || key.contains('/') || key.contains('\\')) return@forEach
             /* 没有字的条目不上账：认不出是哪一段，也没法让他知道自己删的是什么。 */
             if (e.text.isNullOrBlank()) return@forEach
-            /* 旧版扫目录补进来的那些，一并清掉。不看 voice —— 谁写的那行字都认不出是哪一段。 */
+            /* 早年扫目录补进来的条目一并清掉，不看 voice。 */
             if (e.text == LEGACY_BLANK) return@forEach
             val ext = e.ext.orEmpty().lowercase().ifBlank { "wav" }
             if (ext != "wav" && ext != "mp3") return@forEach
@@ -767,7 +758,7 @@ class Synth(private val ctx: Context, private val sys: SysVoice) {
             val f = onDisk[e.key.lowercase() + "." + e.ext.lowercase()] ?: return@filter false
             f.length() > 512
         }
-        /* 账本读坏过就不写回：读坏时手里的这份是空的，写回去等于把原文全抹了。 */
+        /* 账本读坏过就不写回：那时手里这份是空的，写回去会盖掉原文。 */
         if (!ledgerBroken && alive.size != list.size) ledgerSave(alive)
         alive.sortedByDescending { it.at }
     }

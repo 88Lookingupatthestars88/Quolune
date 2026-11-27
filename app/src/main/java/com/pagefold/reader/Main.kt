@@ -1,5 +1,6 @@
 package com.pagefold.reader
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.WindowInsetsCompat
@@ -39,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.toArgb
 import com.pagefold.reader.book.BookMeta
 import com.pagefold.reader.field.Settings
 import com.pagefold.reader.kit.Dock
@@ -47,21 +49,70 @@ import com.pagefold.reader.kit.BgLayer
 import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.ThemeId
 import com.pagefold.reader.ui.AboutScreen
+import com.pagefold.reader.ui.Legal
 import com.pagefold.reader.ui.CONSENT_REV
 import com.pagefold.reader.ui.ConsentScreen
 import com.pagefold.reader.ui.LibraryScreen
 import com.pagefold.reader.ui.PreviewScreen
 import com.pagefold.reader.ui.ReadScreen
 import com.pagefold.reader.ui.SettingsScreen
+import com.pagefold.reader.ui.Splash
 import com.pagefold.reader.ui.VoiceScreen
+
+/** 从外面递进来的落点：换到哪一页，或者直接开某一本。 */
+private data class Ask(val tab: Int?, val book: String?, val seq: Int)
 
 class Main : ComponentActivity() {
 
-    /** 系统「文字转语音」里点 Quolune 右边那个齿轮。 */
-    private fun cameFromTts(): Boolean {
-        val i = intent ?: return false
-        if (i.action == "android.speech.tts.engine.CONFIGURE_ENGINE") return true
-        return i.action == null && i.component?.className?.startsWith(packageName) == true
+    companion object {
+        /** 长按图标那几条带过来的页号。 */
+        const val EXTRA_TAB = "tab"
+
+        /** 通知、快捷方式带过来的书 id。 */
+        const val EXTRA_BOOK = "resume"
+
+        /** 系统「文字转语音」里点 Quolune 右边那个齿轮。 */
+        private const val TTS_CONFIGURE = "android.speech.tts.engine.CONFIGURE_ENGINE"
+
+        /** 桌面递快捷方式时带的那一格。框架里这个常量是私有的，只能用字面值。 */
+        private const val EXTRA_SHORTCUT_ID = "android.intent.extra.shortcut.ID"
+    }
+
+    private var ask by mutableStateOf<Ask?>(null)
+    private var seq = 0
+
+    /** 快捷方式 id 对应的页。com.android.launcher 递过来的意图里带这个 id。 */
+    private fun tabOfShortcut(id: String?): Int? = when (id) {
+        "shelf" -> 0
+        "voice" -> 1
+        "tune" -> 3
+        else -> null
+    }
+
+    /** 读一次进来的意图。没有落点就什么也不做，留在原来那一屏。 */
+    private fun take(raw: Intent?) {
+        if (raw == null) return
+        /* 有的桌面把快捷方式的意图套一层递过来。 */
+        val i = raw.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: raw
+        if (i.action == TTS_CONFIGURE) {
+            ask = Ask(1, null, ++seq)
+            return
+        }
+        /* xml 里 android:value 会被编成整型，直接 getStringExtra 取不到。 */
+        val sid = runCatching {
+            i.getStringExtra(EXTRA_SHORTCUT_ID)
+        }.getOrNull()
+        val tab = when (val t = i.extras?.get(EXTRA_TAB)) {
+            is Number -> t.toInt()
+            is String -> t.toIntOrNull()
+            else -> tabOfShortcut(sid)
+        }
+        val book = when (val b = i.extras?.get(EXTRA_BOOK)) {
+            is String -> b.ifBlank { null }
+            else -> null
+        }
+        if (tab == null && book == null) return
+        ask = Ask(tab, book, ++seq)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,7 +127,14 @@ class Main : ComponentActivity() {
             }
         }
         val app = application as App
-        val jumpVoice = cameFromTts()
+        take(intent)
+        /* 窗口底先铺成当前皮肤的地色：进程起来到第一帧之间不闪白。 */
+        val skin0 = ThemeId.of(app.field.now.theme).skin(app.field.now.dark)
+        runCatching {
+            window.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(skin0.ground.toArgb())
+            )
+        }
         setContent {
             val s by app.field.state.collectAsState()
             val skin = ThemeId.of(s.theme).skin(s.dark)
@@ -89,9 +147,20 @@ class Main : ComponentActivity() {
                 }
             }
             CompositionLocalProvider(LocalSkin provides skin) {
-                TapAway { Root(s, app, jumpVoice) }
+                var intro by remember { mutableStateOf(true) }
+                Box(Modifier.fillMaxSize()) {
+                    TapAway { Root(s, app, ask) { ask = null } }
+                    if (intro) Splash(skin) { intro = false }
+                }
             }
         }
+    }
+
+    /* 已经开着的时候从通知或快捷方式进来，走这里。 */
+    override fun onNewIntent(i: Intent) {
+        super.onNewIntent(i)
+        setIntent(i)
+        take(i)
     }
 
     /** 退到后台就把攒着的改动落盘，别等进程被杀。 */
@@ -135,21 +204,44 @@ private fun Modifier.fillRest(): Modifier = this.layout { measurable, constraint
 }
 
 @Composable
-private fun Root(s: Settings, app: App, jumpVoice: Boolean = false) {
-    /* 没同意过当前条款的人先看那一屏。同意之后 consentRev 记成 CONSENT_REV，之后每次进来都走下面。 */
+private fun Root(s: Settings, app: App, ask: Ask?, onAsk: () -> Unit) {
     if (s.consentRev < CONSENT_REV) {
         ConsentScreen(app)
         return
     }
-    Home(s, app, jumpVoice)
+    /* 同意过就直接进；升级上来的老用户还没建过书库，这里补一次。 */
+    if (!app.ready) app.boot()
+    Home(s, app, ask, onAsk)
 }
 
 @Composable
-private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
-    var tab by remember { mutableIntStateOf(if (jumpVoice) 1 else s.homeTab.coerceIn(0, 4)) }
-    var book by remember { mutableStateOf<BookMeta?>(null) }
-    /** 进书之后直接开口念。「接着听」那颗圆钮点的是这条。 */
-    var autoPlay by remember { mutableStateOf(false) }
+private fun Home(s: Settings, app: App, ask: Ask?, onAsk: () -> Unit) {
+    var tab by remember { mutableIntStateOf(ask?.tab ?: s.homeTab.coerceIn(0, 4)) }
+    /* 条款全文。压在整屏最上层，页签条也盖住。 */
+    var legal by remember { mutableStateOf<Legal.Doc?>(null) }
+    val first = remember {
+        ask?.book?.let { id -> runCatching { app.shelf.all().firstOrNull { it.id == id } }.getOrNull() }
+    }
+    var book by remember { mutableStateOf<BookMeta?>(first) }
+    var autoPlay by remember { mutableStateOf(first != null) }
+
+    /* 界面已经开着时又进来一次：切页或开书，然后把落点清掉。 */
+    LaunchedEffect(ask?.seq) {
+        val a = ask ?: return@LaunchedEffect
+        val target = a.book?.let { id ->
+            runCatching { app.shelf.all().firstOrNull { it.id == id } }.getOrNull()
+        }
+        if (target != null) {
+            book = target
+            autoPlay = true
+        } else if (a.tab != null) {
+            /* 只要换页：正在看的那本书收起来，回到底下的页。 */
+            book = null
+            autoPlay = false
+            tab = a.tab.coerceIn(0, 4)
+        }
+        onAsk()
+    }
 
     // 每页一个滚动位置。rememberLazyListState 内部是 rememberSaveable，
     // 所以切页回来、甚至转屏之后，位置都还在。
@@ -189,7 +281,7 @@ private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
                         )
                         1 -> VoiceScreen(s, app, list = scroll[0])
                         2 -> PreviewScreen(s, app, list = scroll[1])
-                        4 -> AboutScreen(s, app, list = scroll[3])
+                        4 -> AboutScreen(s, app, list = scroll[3], onShow = { legal = it })
                         else -> SettingsScreen(s, app, list = scroll[2])
                     }
                 }
@@ -230,6 +322,19 @@ private fun Home(s: Settings, app: App, jumpVoice: Boolean = false) {
         // 头一次进来落「定音」：嗓源和钥匙没拨对，进书按播放是静音。
         LaunchedEffect(Unit) {
             if (!s.choseHome) app.field.edit { it.copy(homeTab = 3, choseHome = true) }
+        }
+
+        /* 条款全文。画在这一层才盖得住页签条，也不另开窗口，点开不闪。 */
+        androidx.activity.compose.BackHandler(enabled = legal != null) { legal = null }
+        legal?.let { d ->
+            val sk = LocalSkin.current
+            Box(Modifier.fillMaxSize().background(sk.ground)) {
+                com.pagefold.reader.ui.LegalSheet(
+                    doc = d,
+                    onBack = { legal = null },
+                    onOpen = { legal = it },
+                )
+            }
         }
     }
 }

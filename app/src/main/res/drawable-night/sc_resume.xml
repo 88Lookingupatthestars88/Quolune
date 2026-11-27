@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 接着念：一副头戴，中间一枚播放三角。跟应用图标是同一件东西。内容收在 5–19。 -->
+    <path
+        android:pathData="M6.6,12.2 A5.4,5.4 0 0 1 17.4,12.2"
+        android:strokeColor="#FFEDE6D8"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M5.4,12.8 L5.4,16.8 M18.6,12.8 L18.6,16.8"
+        android:strokeColor="#FFEDE6D8"
+        android:strokeWidth="2.0"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M10.9,13.5 L14.9,14.9 L10.9,16.3 Z"
+        android:fillColor="#FFEDE6D8" />
+</vector>

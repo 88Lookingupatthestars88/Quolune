@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 系统深色模式下先画这一块，别在深色桌面上闪一下米色。 -->
+    <color name="boot_ground">#0B0E13</color>
+
+    <color name="note_surface">#191B20</color>
+    <color name="note_ink">#EDE6D8</color>
+    <color name="note_dim">#9A938A</color>
+    <color name="note_accent">#E8845A</color>
+</resources>

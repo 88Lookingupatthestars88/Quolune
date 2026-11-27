@@ -1,6 +1,7 @@
 package com.pagefold.reader.ui
 
 import android.Manifest
+import android.provider.OpenableColumns
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,12 +14,17 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withLink
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +48,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.style.TextDecoration
+import com.pagefold.reader.kit.Rule
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.pagefold.reader.App
@@ -49,6 +60,7 @@ import com.pagefold.reader.kit.Btn
 import com.pagefold.reader.kit.BtnKind
 import com.pagefold.reader.kit.LocalSkin
 import com.pagefold.reader.kit.tap
+import com.pagefold.reader.voice.AudioFormats
 import com.pagefold.reader.voice.CloneApi
 import com.pagefold.reader.voice.Rec
 import com.pagefold.reader.voice.Voice
@@ -90,8 +102,24 @@ internal fun CloneVoice(
     var rec by remember { mutableStateOf<com.pagefold.reader.voice.Take?>(null) }
     var recSec by remember { mutableIntStateOf(0) }
 
+    // 《声音样本处理说明》的单独同意：没同意过就先问，同意之后不再问
+    var gate by remember { mutableStateOf(false) }
+    var gateOk by remember { mutableStateOf(false) }
+    var waiting by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var readDoc by remember { mutableStateOf(false) }
+
+    fun gated(act: () -> Unit) {
+        if (app.field.now.voiceConsent) act() else {
+            waiting = act
+            gateOk = false
+            gate = true
+        }
+    }
+
     val engine = able.firstOrNull { it.id == pick }
     val shape = engine?.let { CloneApi.shape(it.protocol, it.base ?: "") }
+    // 选文件的回调在组合时就注册了，服务商可能之后才切，取当前那个。
+    val shapeNow = rememberUpdatedState(shape)
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -99,22 +127,35 @@ internal fun CloneVoice(
         scope.launch {
             val r = withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    val cr = ctx.contentResolver
+                    val picked = runCatching {
+                        cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                            if (it.moveToFirst()) it.getString(0) else null
+                        }
+                    }.getOrNull()
+                    val mime = runCatching { cr.getType(uri) }.getOrNull().orEmpty()
+                    val ext = AudioFormats.extOf(mime, picked)
+                        ?: throw IllegalStateException(
+                            "这段是 ${picked ?: mime.ifBlank { "认不出的格式" }}，传不上去。换 wav、mp3 或 m4a。"
+                        )
+                    val bytes = cr.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw IllegalStateException("打不开这个文件")
-                    val mime = runCatching { ctx.contentResolver.getType(uri) }.getOrNull().orEmpty()
-                    bytes to mime
+                    Triple(bytes, ext, picked)
                 }
             }
             busy = false
-            r.onSuccess { (b, m) ->
+            r.onSuccess { (b, ext, picked) ->
                 if (!okSize(b)) {
                     hint = "这段录音 ${mb(b)} MB，超过 10 MB 传不上去。换一段短的。"
                     return@onSuccess
                 }
                 clip = b
                 clipSec = wavSec(b)
-                fromFile = m
-                hint = null
+                // 存成标准 MIME，样本 data URI 与上传的扩展名都从这一处来。
+                fromFile = "audio/$ext"
+                hint = if (ext == "m4a" && shapeNow.value?.localOnly == true)
+                    "${picked ?: "这段"}是 m4a，这家只认 wav 和 mp3。换一段。"
+                else null
             }.onFailure { hint = it.message ?: "读不出来" }
         }
     }
@@ -215,9 +256,9 @@ internal fun CloneVoice(
                 sec = recSec, recording = rec != null,
                 has = clip != null && rec == null,
                 ready = clipSec,
-                onRec = { startRec() },
+                onRec = { gated { startRec() } },
                 onStop = { rec?.let { r -> scope.launch { withContext(Dispatchers.IO) { r.stop() } } } },
-                onFile = { filePicker.launch(arrayOf("audio/*")) },
+                onFile = { gated { filePicker.launch(AudioFormats.MIME) } },
 onDrop = { clip = null; clipSec = 0; record = "" },
 )
 
@@ -235,11 +276,11 @@ SField(note, { note = it.take(40) }, "四十多岁，低，说话慢")
 // 硅基那条上传时要一句参考文本对齐音色，别的家不问。
 if (shape?.needsText == true) {
 Spacer(Modifier.height(11.dp))
-Text("录音里说的是什么", fontSize = 11.sp, color = skin.inkFaint)
+Text("这段录音里说的是什么", fontSize = 11.sp, color = skin.inkFaint)
 Spacer(Modifier.height(5.dp))
 SField(
 record, { record = it.take(400) },
-"把录音里那句话原样写下来，一个字别差", 70.dp,
+"这家接口要用这句话对齐音色，照录音原样写", 70.dp,
 )
 }
 
@@ -247,9 +288,9 @@ Spacer(Modifier.height(10.dp))
 Text(
 when {
 shape?.localOnly == true ->
-"只收 mp3 和 wav，10 MB 以内。这副嗓每念一句都要把它整段带上，长篇会慢。"
+    "只收 mp3 和 wav，10 MB 以内。这副嗓每念一句都要把它整段带上，长篇会慢。"
 else ->
-"10 秒到 5 分钟，20 MB 以内。做好了七天内得用一次，不然对面会删。"
+    "10 秒到 5 分钟，10 MB 以内。做好了七天内得用一次，不然对面会删。"
 },
 fontSize = 10.sp, color = skin.inkFaint, lineHeight = 15.sp
 )
@@ -316,6 +357,125 @@ desc = note.trim(),
                 "只拿你本人、或已经获准使用的声音。",
                 fontSize = 10.sp, color = skin.inkFaint
             )
+        }
+    }
+
+    if (gate) {
+        SampleGate(
+            reading = readDoc,
+            onRead = { readDoc = true },
+            onCancel = {
+                if (readDoc) readDoc = false
+                else { gate = false; waiting = null }
+            },
+            onGo = {
+                if (gateOk) {
+                    app.field.edit { it.copy(voiceConsent = true) }
+                    app.field.flush()
+                    gate = false
+                    val act = waiting
+                    waiting = null
+                    act?.invoke()
+                }
+            },
+            ok = gateOk,
+            onToggle = { gateOk = !gateOk },
+        )
+    }
+
+}
+
+/** 第一次点「复刻嗓音」时那条告知。同意之前麦克风不打开、文件选择器不弹。 */
+@Composable
+private fun SampleGate(
+    reading: Boolean,
+    onRead: () -> Unit,
+    onCancel: () -> Unit,
+    onGo: () -> Unit,
+    ok: Boolean,
+    onToggle: () -> Unit,
+) {
+    val s = LocalSkin.current
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onCancel,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        /* 看说明用同一个窗口换内容，不再叠一层 Dialog —— 叠出来的会闪。 */
+        if (reading) {
+            Box(Modifier.fillMaxSize().background(s.ground)) {
+                LegalSheet(Legal.VOICE, onBack = onCancel, onOpen = {})
+            }
+        } else Box(
+            Modifier.fillMaxSize().background(s.scrim),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                Modifier.padding(horizontal = 26.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(s.surface)
+                    .padding(horizontal = 22.dp, vertical = 24.dp)
+            ) {
+                Text(
+                    "复刻嗓音",
+                    modifier = Modifier.fillMaxWidth(),
+                    fontSize = 19.sp,
+                    color = s.ink,
+                    fontFamily = s.titleFont,
+                    letterSpacing = 1.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "本应用将录制一段您的声音，或由您指定一个音频文件，上传到您配置的服务商（包括您此后添加的），用来生成音色。",
+                    fontSize = 14.sp, lineHeight = 23.sp, color = s.inkDim,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "服务商的要求不同，样本可能在本机留一份，也可能不留。留下的那份随音色一起删除。服务商一端的留存与删除，由该服务商决定。",
+                    fontSize = 14.sp, lineHeight = 23.sp, color = s.inkDim,
+                )
+                Spacer(Modifier.height(16.dp))
+                Rule()
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(44.dp).tap { onToggle() }, contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.size(19.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(if (ok) s.flame else Color.Transparent)
+                                .border(1.5.dp, if (ok) s.flame else s.hair, RoundedCornerShape(4.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (ok) Text("✓", fontSize = 13.sp, color = s.ground, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        buildAnnotatedString {
+                            append("我已阅读")
+                            withLink(
+                                LinkAnnotation.Clickable(
+                                    tag = "voice",
+                                    styles = TextLinkStyles(
+                                        style = SpanStyle(color = s.flame, textDecoration = TextDecoration.Underline)
+                                    ),
+                                ) { onRead() }
+                            ) { append("《声音样本处理说明》") }
+                        },
+                        modifier = Modifier.weight(1f),
+                        fontSize = 14.sp, lineHeight = 23.sp, color = s.inkDim,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Btn("取消", onCancel, BtnKind.GHOST, Modifier.weight(1f))
+                    Btn("继续", onGo, modifier = Modifier.weight(1f), enabled = ok)
+                }
+            }
         }
     }
 }

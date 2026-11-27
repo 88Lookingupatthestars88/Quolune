@@ -1,4 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Quolune</string>
+
+    <string name="sc_resume">继续听</string>
+    <string name="sc_shelf">书房</string>
+    <string name="sc_tune">定音</string>
+    <string name="sc_voice">音色</string>
+    <string name="sc_off">这一项现在打不开</string>
+
+    <string name="note_prev">上一句</string>
+    <string name="note_next">下一句</string>
+    <string name="note_pause">暂停</string>
+    <string name="note_play">播放</string>
+    <string name="note_quit">退出</string>
 </resources>

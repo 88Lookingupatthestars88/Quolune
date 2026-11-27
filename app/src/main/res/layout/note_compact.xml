@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    收起态，同时当作锁屏那份（publicVersion）。
+    锁屏只给一格高度，所以这里必须短：三行字 + 一排按键，全部塞在 100dp 以内，
+    到了锁屏上不会再被裁掉半截，也不用长按展开才看得见按键。
+    只用 RemoteViews 认的控件：LinearLayout / RelativeLayout / ImageView / TextView。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/nc_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingEnd="16dp"
+    android:paddingTop="7dp"
+    android:paddingBottom="5dp">
+
+    <TextView
+        android:id="@+id/nc_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="12.5sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/nc_ch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="10.5sp" />
+
+    <TextView
+        android:id="@+id/nc_line"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="29dp"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/nc_prev"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:background="@drawable/note_btn"
+            android:gravity="center"
+            android:paddingStart="11dp"
+            android:paddingEnd="11dp"
+            android:text="@string/note_prev"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/nc_toggle"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/note_btn_strong"
+            android:gravity="center"
+            android:paddingStart="13dp"
+            android:paddingEnd="13dp"
+            android:text="@string/note_pause"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/nc_next"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:layout_marginStart="5dp"
+            android:background="@drawable/note_btn"
+            android:gravity="center"
+            android:paddingStart="11dp"
+            android:paddingEnd="11dp"
+            android:text="@string/note_next"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/nc_close"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:background="@drawable/note_btn"
+            android:gravity="center"
+            android:paddingStart="11dp"
+            android:paddingEnd="11dp"
+            android:text="@string/note_quit"
+            android:textSize="12sp" />
+    </LinearLayout>
+</LinearLayout>

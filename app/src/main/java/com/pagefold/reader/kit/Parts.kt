@@ -93,6 +93,7 @@ fun T(
     maxLines: Int = Int.MAX_VALUE,
     family: androidx.compose.ui.text.font.FontFamily? = null,
     modifier: Modifier = Modifier,
+    align: androidx.compose.ui.text.style.TextAlign = androidx.compose.ui.text.style.TextAlign.Start,
 ) {
     val s = LocalSkin.current
     Text(
@@ -103,6 +104,7 @@ fun T(
         fontWeight = weight,
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
+        textAlign = align,
         fontFamily = family ?: s.titleFont,
         lineHeight = (size * 1.45f).sp,
     )
@@ -837,9 +839,7 @@ fun Ruler(
                                     grip = false
                                     changeNow.value(live)
                                 } else {
-                                    // 只按没拖：不改数。
-                                    // 整条都能接手横拖，所以「按一下跳过去」没有必要；
-                                    // 留着它，想微调时按在圆点边上，值会跳到手指那儿。
+                                    // 只按没拖不改数。整条都能接手横拖，按一下跳过去没有必要。
                                     grip = false
                                 }
                             }

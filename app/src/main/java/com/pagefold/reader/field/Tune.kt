@@ -17,10 +17,8 @@ object Tune {
         Triple("paraGap2", "段间距", "段落间的额外空白，0 表示仅换行"),
         Triple("turn", "翻法", "0 左右翻，1 上下滚"),
         // ── 读法 ──
-        Triple("context", "前情", "合成时附带的上文句数，用于延续语气，不会单独念出"),
-        Triple("next", "后话", "合成时附带的下文句数，用于判断句末停顿，不会单独念出"),
-        Triple("prefetch", "先备几段", "预取段数，播放当前段时后续段落提前合成"),
-        Triple("chunkChars", "一气念多少字", "单次合成的字数上限。数值增大则出音延迟增加，数值减小则请求次数增加"),
+        Triple("prefetchChars", "先备多少字", "往后提前合成的字数。开到一半就停，不够再接"),
+        Triple("chunkChars", "一行最多多少字", "单行超过这么多就在最近的句末切开。只在原书一段特别长时才用得上"),
         Triple("cacheChapters", "往后先备几章", "当前章之后预缓存并存入本机的章数"),
         Triple("gapMs", "两句之间歇多久", "句与句之间的停顿，单位毫秒"),
         Triple("reqIntervalMs", "传输间隔", "向同一服务商发起两次请求的最小间隔，本机限流，与合成速度无关"),
@@ -36,14 +34,13 @@ object Tune {
         "padH" -> intArrayOf(8, 48, 2)
         "paraGap2" -> intArrayOf(0, 40, 2)
         "turn" -> intArrayOf(0, 1, 1)
-        "context", "next" -> intArrayOf(0, 20, 1)
-        "prefetch" -> intArrayOf(1, 12, 1)
+        "prefetchChars" -> intArrayOf(600, 12000, 300)
         "chunkChars" -> intArrayOf(200, 1800, 100)
         "cacheChapters" -> intArrayOf(0, 20, 1)
         "gapMs", "reqIntervalMs" -> intArrayOf(0, 3000, 100)
         "retry" -> intArrayOf(0, 5, 1)
         "retryDelayMs" -> intArrayOf(200, 5000, 200)
-        "concurrency" -> intArrayOf(1, 4, 1)
+        "concurrency" -> intArrayOf(1, 10, 1)
         else -> intArrayOf(0, 100, 1)
     }
 
@@ -53,8 +50,7 @@ object Tune {
         "padH" -> "dp"
         "paraGap2" -> "sp"
         "turn" -> ""
-        "context", "next" -> "句"
-        "prefetch" -> "段"
+        "prefetchChars" -> "字"
         "chunkChars" -> "字"
         "cacheChapters" -> "章"
         "gapMs", "reqIntervalMs", "retryDelayMs" -> "毫秒"
@@ -69,9 +65,7 @@ object Tune {
         "padH" -> s.padH
         "paraGap2" -> s.paraGap
         "turn" -> if (s.turn == TurnMode.FLIP) 0 else 1
-        "context" -> s.context
-        "next" -> s.next
-        "prefetch" -> s.prefetch
+        "prefetchChars" -> s.prefetchChars
         "chunkChars" -> s.chunkChars
         "cacheChapters" -> s.cacheChapters
         "gapMs" -> s.gapMs
@@ -102,9 +96,7 @@ object Tune {
         if (m.containsKey("padH")) out = out.copy(padH = m.getValue("padH").coerceIn(8, 48))
         if (m.containsKey("paraGap2")) out = out.copy(paraGap = m.getValue("paraGap2").coerceIn(0, 40))
         if (m.containsKey("turn")) out = out.copy(turnMode = if (m.getValue("turn") == 0) "FLIP" else "SCROLL")
-        if (m.containsKey("context")) out = out.copy(context = m.getValue("context"))
-        if (m.containsKey("next")) out = out.copy(next = m.getValue("next"))
-        if (m.containsKey("prefetch")) out = out.copy(prefetch = m.getValue("prefetch"))
+        if (m.containsKey("prefetchChars")) out = out.copy(prefetchChars = m.getValue("prefetchChars"))
         if (m.containsKey("chunkChars")) out = out.copy(chunkChars = m.getValue("chunkChars"))
         if (m.containsKey("cacheChapters")) out = out.copy(cacheChapters = m.getValue("cacheChapters"))
         if (m.containsKey("gapMs")) out = out.copy(gapMs = m.getValue("gapMs"))

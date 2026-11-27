@@ -4,6 +4,7 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowBackground">#0A0B10</item>
+        <!-- 进程起来到第一帧之间只有这一块色。真正的启动页在界面里画。 -->
+        <item name="android:windowBackground">@color/boot_ground</item>
     </style>
 </resources>

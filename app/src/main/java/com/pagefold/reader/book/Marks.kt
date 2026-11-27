@@ -45,7 +45,7 @@ object Marks {
         gen.intValue = gen.intValue + 1
     }
 
-    /** 角色表改过、书被换过：这一本的旧账全作废，盘上那份一起删。 */
+    /** 角色表改过、书被换过：这一本的签子全作废，盘上那份一起删。 */
     fun dropBook(bookId: String) {
         val pre = "$bookId|"
         done.keys.removeAll { it.startsWith(pre) }

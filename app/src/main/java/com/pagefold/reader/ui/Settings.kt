@@ -414,9 +414,7 @@ private fun TuneScreen(
             }
 
             // ── 接口 ──
-            //
-            // 这一节跟上面那七家不是一回事：上面是「把字念成声音」，这里是「替人拿主意」。
-            // 目前只给派角用一次 —— 让它把名单分成组、每组派一副嗓子。
+            // 这些不是声源：上面是把字念成声音，这里是替人拿主意。目前只给派角用。
             item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 22.dp)) }
             item { Chapter("接口") }
             /* 这行字回答「这一节跟上面那七家有什么区别」——上面是把字念成声音，这里是「替人拿主意」，而且只服务派角那一件事。 */
@@ -477,9 +475,7 @@ private fun TuneScreen(
 
             item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 22.dp)) }
             // ── 派角 ──
-            //
-            // 这一节是**起手那一档**：每本书点「让 AI 排」时先照这里，书里还能临时改。
-            // 没有这一节，用户每换一本书都得重新点一遍「准它造」「准用哪几副」。
+            // 起手那一档：每本书点「让 AI 排」时先照这里，书里还能临时改。
             item { Chapter("派角") }
             item {
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
@@ -512,9 +508,7 @@ private fun TuneScreen(
             }
 
             // ── 新书照这个来 ──
-            //
-            // 这一节只管**新收进来的书**。已经进库的书各有各的版式，
-            // 在这里拨动它们不会跟着变 —— 要改那一本，进那本书的「这一本怎么读」。
+            // 只管新收进来的书。已进库的书各按各自的「这一本怎么读」。
             item { Chapter("新书照这个来") }
             item {
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
@@ -589,40 +583,22 @@ private fun TuneScreen(
                 Box(Modifier.padding(horizontal = Sz.gutter)) {
                     Quiet {
                         Column(Modifier.padding(vertical = 4.dp)) {
-                            Bare("衔接（前后话）")
-                            Ruler(
-                                "往前带几句", s.context.toFloat(), 0f, 20f, 1f,
-                                { app.field.edit { c -> c.copy(context = it.roundToInt()) } },
-                                unit = "句", low = "0", high = "20",
-                                hint = "合成时附带的上文句数。上文随请求一同发送，用于延续语气，只用于朗读更加顺畅，不会单独念出。"
-                            )
-                            Ruler(
-                                "往后带几句", s.next.toFloat(), 0f, 20f, 1f,
-                                { app.field.edit { c -> c.copy(next = it.roundToInt()) } },
-                                unit = "句", low = "0", high = "20",
-                                hint = "合成时附带的下文句数。下文随请求一同发送，用于判断句末停顿，只用于朗读更加顺畅，不会单独念出。"
-                            )
                             RowLine("按段落断语气") {
                                 Pill(s.cue) { app.field.edit { c -> c.copy(cue = it) } }
                             }
-                            Text(
-                                "按每个句子判定语气类型，分别调整语速和音高。",
-                                fontSize = 11.sp, color = skin.inkFaint, lineHeight = 16.sp,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
                             Hair()
                             Bare("驿马（先备多少）")
                             Ruler(
-                                "先备几段", s.prefetch.toFloat(), 1f, 12f, 1f,
-                                { app.field.edit { c -> c.copy(prefetch = it.roundToInt()) } },
-                                unit = "段", low = "1", high = "12",
-                                hint = "预取段数。播放当前段时，后续段落提前合成。数值增大，网络波动时中断更少，并发占用与起播延迟同时上升。"
+                                "先备多少字", s.prefetchChars.toFloat(), 600f, 12000f, 300f,
+                                { app.field.edit { c -> c.copy(prefetchChars = it.roundToInt()) } },
+                                unit = "字", low = "600", high = "12000",
+                                hint = "往后提前合成的字数。开播时一次发满，播到剩一半再补齐。"
                             )
                             Ruler(
-                                "同时开几路", s.concurrency.toFloat(), 1f, 4f, 1f,
+                                "同时开几路", s.concurrency.toFloat(), 1f, 10f, 1f,
                                 { app.field.edit { c -> c.copy(concurrency = it.roundToInt()) } },
-                                unit = "路", low = "1", high = "4",
-                                hint = "对同一服务商的并发请求上限。超过两路后首句不再提前，返回 429 的概率上升。"
+                                unit = "路", low = "1", high = "10",
+                                hint = "同时向服务商发出的请求数。开播时几路一起发；块已经很大时，一两路就够。"
                             )
                             Ruler(
                                 "传输间隔", (s.reqIntervalMs / 100f).coerceIn(0f, 30f), 0f, 30f, 1f,
@@ -645,10 +621,10 @@ private fun TuneScreen(
                                 hint = "两次重试之间的固定间隔，单位秒。取值过小时，同一故障在短时间内被连续命中，重试成功率下降。"
                             )
                             Ruler(
-                                "往后先备几章", s.cacheChapters.toFloat(), 0f, 20f, 1f,
+                                "往后先备几章", s.cacheChapters.toFloat(), 1f, 20f, 1f,
                                 { app.field.edit { c -> c.copy(cacheChapters = it.roundToInt()) } },
-                                unit = "章", low = "0", high = "20",
-                                hint = "预缓存章数。当前章之后的若干章音频提前合成并存入本机。数值增大，离线可播时长增加，占用存储同比例上升。"
+                                unit = "章", low = "1", high = "20",
+                                hint = "从「从第几章起」那一格往后备几章，存进本机。"
                             )
                             Spacer(Modifier.height(6.dp))
                             Btn(
@@ -656,12 +632,12 @@ private fun TuneScreen(
                                 {
                                     app.field.edit {
                                         it.copy(
-                                            prefetch = 6, reqIntervalMs = 600, concurrency = 2,
+                                            prefetchChars = 3600, reqIntervalMs = 600, concurrency = 2,
                                             retry = 3, retryDelayMs = 1200, cacheChapters = 5,
-                                            context = 1, next = 1, cue = true,
+                                            cue = true,
                                         )
                                     }
-                                    msg = "眼下预取 6 段，两路一起取，中间隔 0.6 秒。"                                },
+                                    msg = "眼下先备 3600 字，两路一起取，中间隔 0.6 秒。"                                },
                                 BtnKind.GHOST,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1858,7 +1834,7 @@ internal fun Hair() {
 }
 
 @Composable
-private fun RowLine(label: String, trailing: @Composable () -> Unit) {
+internal fun RowLine(label: String, trailing: @Composable () -> Unit) {
     val s = LocalSkin.current
     Row(
         Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(vertical = 9.dp),

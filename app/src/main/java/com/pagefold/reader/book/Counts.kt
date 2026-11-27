@@ -63,7 +63,7 @@ object Counts {
 
     fun of(id: String): Int = state[id] ?: IDLE
 
-    /** 进过一次就派下去。已经数过、正在数、数失败过都不再自动重来；书里已经有名单的也不数 ——名单只决定「这本书有谁在说话」。 */
+    /** 数过、正在数、失败过两次的不自动重来；书里已经有名单的也不数。 */
     fun ensure(app: App, meta: BookMeta) {
         /* 句库建好了就是 DONE，用户点「重数」才重来。 */
         val was = state[meta.id]

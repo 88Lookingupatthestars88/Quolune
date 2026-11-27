@@ -1076,7 +1076,7 @@ internal fun rowsOf(cast: CastBook): List<CastRow> {
         if (out.any { it.name == n || n in it.alt }) return@forEach
         out.add(CastRow(n, emptyList(), total(n), ""))
     }
-    /* 组排在最前。一组是一群人共用一副嗓子，它比任何单个角色都更「该先看见」——而且并完之后要找它配嗓子，还得翻到中间去找，等于把它藏起来了。 */
+    /* 组排在最前：一组是一群人共用一副嗓子。 */
     return out.sortedWith(
         compareByDescending<CastRow> { it.alt.isNotEmpty() }.thenByDescending { it.lines }
     )
@@ -1324,7 +1324,7 @@ private fun Tick(on: Boolean, yes: String, no: String) {
     }
 }
 
-/** 旁白 / 对白那张纸。点一下就存，纸不关 —— 挑嗓子本来就是「挨个听一遍再定」，每挑一次退出去再点回来，等于把这件事做成了十次往返。 */
+/** 旁白 / 对白那张纸。点一下就存，纸不关。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PersonSheet(

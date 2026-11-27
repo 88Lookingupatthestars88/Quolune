@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 其余几档：只在纸上垫一层极淡的朱。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#14B4462C" />
+    <corners android:radius="9dp" />
+</shape>

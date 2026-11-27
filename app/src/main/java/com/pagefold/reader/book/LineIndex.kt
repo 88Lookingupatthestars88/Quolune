@@ -68,7 +68,7 @@ object LineIndex {
     fun has(ctx: Context, bookId: String, name: String): Boolean =
         f(ctx, bookId, name).exists()
 
-    /** 旧版（坏的）索引一律作废。读不到就当这本书这个人没有索引 —— 调用方退回读 jsonl，那份是对的。 */
+    /** magic 对不上的索引当作没有，调用方退回读 jsonl。 */
     private fun stale(file: File): Boolean {
         val head = runCatching {
             java.io.DataInputStream(file.inputStream().buffered()).use { it.readInt() }

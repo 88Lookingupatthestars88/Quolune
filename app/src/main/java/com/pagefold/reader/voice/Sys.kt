@@ -124,12 +124,9 @@ class SysVoice(ctx: Context) {
     // ───────────────────────── 枚举 ─────────────────────────
 
     /**
-     * 机器上装了的朗读引擎：包名 → 名字。
-     *
-     * 只做包名扫描，不初始化引擎。声明上要看三样：服务带 `android.speech.tts` 这条
-     * meta-data（要 GET_META_DATA 才读得到），绑定权限是 `BIND_TTS_SERVICE`，
-     * 或者包里有声明 `ACTION_CHECK_TTS_DATA` 的 activity。
-     * 念不念得出声不在这里判，见 [usable]。
+     * 机器上装了的朗读引擎：包名 → 名字。只扫包名，不初始化引擎。
+     * 判据：`android.speech.tts` 的 meta-data（要 GET_META_DATA）、绑定权限 `BIND_TTS_SERVICE`、
+     * 或 `ACTION_CHECK_TTS_DATA` 的 activity。能不能出声见 [usable]。
      */
     fun engines(): List<Pair<String, String>> {
         val pm = appCtx.packageManager

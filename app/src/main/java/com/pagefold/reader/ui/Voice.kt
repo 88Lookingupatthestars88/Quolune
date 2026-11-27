@@ -151,9 +151,7 @@ fun VoiceScreen(
     val tuneDirty = draft != savedTune
 
     fun use(v: Voice) {
-        // 已经就是它：不重复写盘。判断用名字 —— defaultVoice 这个字段存的就是名字。
-        // 旧存档里那副可能存的是英文名（`alex`），现在显示的是「沉稳男声 alex」，
-        // 所以 param 也要比一次，不然一进页面就被当成「换了个人」。
+        // 已经就是它：不重复写盘。判断用名字与 param 两样 —— defaultVoice 存的是名字。
         val was = app.field.now.defaultVoice
         // 存下来的名字可能是空的，而界面已经靠兜底亮着一副；这时也要照样写进去。
         if (v.name == was || v.param == was) return

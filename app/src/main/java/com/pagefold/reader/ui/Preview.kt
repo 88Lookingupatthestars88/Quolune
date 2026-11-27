@@ -167,9 +167,7 @@ fun PreviewScreen(
                     Hint("还没有可用的音色。到「定音」里打开一副嗓音，这里才有可选的。")
                 }
             } else {
-                // 点了哪一副，哪一副就排到最前 —— 不必再横着找回来。
-                // 这个顺序得在 LazyRow 外面算：它的 content 是 LazyListScope，
-                // 里面不能调 remember。
+                // 点了哪一副，哪一副排到最前。这个顺序在 LazyRow 外面算，里面不能调 remember。
                 val ordered = run {
                     val head = pool.filter { it.id == pick?.id }
                     head + pool.filterNot { it.id == pick?.id }

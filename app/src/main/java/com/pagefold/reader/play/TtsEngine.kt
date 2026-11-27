@@ -117,11 +117,8 @@ class TtsEngine : TextToSpeechService() {
         }.getOrDefault(TextToSpeech.ERROR)
         if (began != TextToSpeech.SUCCESS) return
 
-        // 先喂一口静音。
-        // start() 之后 framework 立刻把 AudioTrack 拉起来了；合成要走网络，
-        // 头一包数据要一两秒才到。这段空档里轨道是饿着的，有的系统会判定
-        // 「没有声音，这引擎死了」，然后自己把播放掐了。给 120ms 静音垫住，
-        // 听起来也不亏 —— 本来就是句首的停顿。
+        // 先喂一口静音。start() 之后 framework 立刻拉起 AudioTrack，而头一包数据
+        // 要一两秒才到，空档里有些系统会判定引擎死了把播放掐掉。垫 120ms。
         runCatching {
             val cap0 = callback.maxBufferSize.coerceIn(1024, 65536)
             val pad = ByteArray(minOf(cap0, RATE / 1000 * 120 * 2))
@@ -163,7 +160,7 @@ class TtsEngine : TextToSpeechService() {
                 val clip = runCatching {
                     kotlinx.coroutines.runBlocking {
                         app.synth.make(
-                            s, v, piece, dark, null,
+                            s, v, piece, dark,
                             bakeSpeed = speed, bakePitch = pitch,
                         )
                     }

@@ -39,6 +39,10 @@ data class BookMeta(
     /** 这一章在书里叫什么（「序」「第七十章 一封信」）。空 = 只知道第几章。 */
     val chapterName: String = "",
     val charOffset: Int = 0,
+    /** 听到哪儿：章号、这一章里的第几个字。[heard] 为假 = 这本书还没开过口。 */
+    val hearCh: Int = 0,
+    val hearOff: Int = 0,
+    val heard: Boolean = false,
     val progress: Float = 0f,
     val tintSeed: Int = 0,
     /** 用户自己选的封面图，存在 files/covers 下。空 = 用书名生成的那块布面。 */
@@ -199,6 +203,9 @@ class Shelf(ctx: Context) {
                 chapterNo = num(o, "chapterNo"),
                 chapterName = str(o, "chapterName"),
                 charOffset = num(o, "charOffset"),
+                hearCh = num(o, "hearCh"),
+                hearOff = num(o, "hearOff"),
+                heard = bool(o, "heard"),
                 progress = flt(o, "progress"),
                 tintSeed = num(o, "tintSeed"),
                 cover = str(o, "cover"),
@@ -222,6 +229,9 @@ class Shelf(ctx: Context) {
 
     private fun flt(o: com.google.gson.JsonObject, k: String): Float =
         runCatching { o.get(k)?.takeIf { !it.isJsonNull }?.asFloat }.getOrNull() ?: 0f
+
+    private fun bool(o: com.google.gson.JsonObject, k: String): Boolean =
+        runCatching { o.get(k)?.takeIf { !it.isJsonNull }?.asBoolean }.getOrNull() ?: false
 
     /** 落盘：先写临时文件再改名；空表不盖非空存档。 */
     fun save(list: List<BookMeta>, allowEmpty: Boolean = false) {
@@ -305,8 +315,24 @@ class Shelf(ctx: Context) {
         return list
     }
 
-    /** 切出来的章数跟架上记的不一样时回写一次。架上写「941 章」、书里只有 94 章，是因为切章判据变过、老账没刷新。 */
-    fun setChapters(id: String, n: Int): List<BookMeta> {
+    /** 记「听到哪儿」，只动 [hearCh] / [hearOff]，[chapterIndex] / [charOffset] 归阅读位置。 */
+    fun hear(id: String, chapter: Int, offset: Int): List<BookMeta> {
+        val list = all().toMutableList()
+        val i = list.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            val before = list[i]
+            list[i] = before.copy(hearCh = chapter, hearOff = offset, heard = true)
+            save(list)
+            /* 换章、第一次开口：这两下要经得起进程被杀，同步落盘。 */
+            if (before.hearCh != chapter || !before.heard) {
+                setAside(list[i])
+                runCatching { write(list) }
+            }
+        }
+        return list
+    }
+
+    /** 切出来的章数跟架上记的不一样时回写一次。架上写「941 章」、书里只有 94 章，是因为切章判据变过、老账没刷新。 */    fun setChapters(id: String, n: Int): List<BookMeta> {
         val m = find(id) ?: return all()
         if (n <= 0 || m.chapters == n) return all()
         /* 这次切出来全是自动分块，说明书里的标题一个都没认出来。别拿它盖掉真账。 */

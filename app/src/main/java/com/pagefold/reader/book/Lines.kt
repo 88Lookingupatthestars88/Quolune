@@ -208,7 +208,7 @@ object Lines {
     ): Int {
         val d = dir(ctx, bookId)
         if (!d.exists()) d.mkdirs()
-        /* 重扫：先清老文件，否则旧句子会跟着留下来。二进制索引也得清 —— 留着的话，读的人先读到旧账。 */
+        /* 重扫先清文件和二进制索引，不然读到的还是上一次的句子。 */
         runCatching {
             d.listFiles()?.forEach { if (it.name.endsWith(".jsonl") || it.name.endsWith(".idx")) it.delete() }
         }

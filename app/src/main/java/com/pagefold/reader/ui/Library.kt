@@ -698,12 +698,8 @@ private fun wrapTitle(t: String, per: Int): List<String> {
 private const val MIN_BAR = 0.02f
 
 /**
- * 封面底边那条进度：读到第几章。
- *
- * 按章算，不按全书字数比 —— 那个数存在存档里，是某一刻的快照，冷启动直接拿出来画，
- * 跟目录重切过的书对不上。章数是整数，读出来就是真的。
- *
- * 章数还不知道（刚收进来、还没打开过）就不画：画满会被当成读完了。
+ * 封面底边那条进度：读到第几章。按章算，不按全书字数比。
+ * 章数还不知道（刚收进来、还没打开过）就不画。
  */
 @Composable
 private fun ProgressLine(b: BookMeta) {

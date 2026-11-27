@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 长按桌面图标弹出的那几条。第一条「继续听」是运行期现算的，不在这里。
+     图标跟底栏那几格同形：书房是摊开的书，音色五根杆，定音三道律管。
+     深色模式另有一套（drawable-night），不用 tint —— RemoteViews 之外的地方染色不可靠。 -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/sc_shelf"
+        android:shortcutDisabledMessage="@string/sc_off"
+        android:shortcutId="shelf"
+        android:shortcutLongLabel="@string/sc_shelf"
+        android:shortcutShortLabel="@string/sc_shelf">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.pagefold.reader.Main"
+            android:targetPackage="com.pagefold.reader">
+            <extra
+                android:name="tab"
+                android:value="0" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/sc_tune"
+        android:shortcutDisabledMessage="@string/sc_off"
+        android:shortcutId="tune"
+        android:shortcutLongLabel="@string/sc_tune"
+        android:shortcutShortLabel="@string/sc_tune">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.pagefold.reader.Main"
+            android:targetPackage="com.pagefold.reader">
+            <extra
+                android:name="tab"
+                android:value="3" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/sc_voice"
+        android:shortcutDisabledMessage="@string/sc_off"
+        android:shortcutId="voice"
+        android:shortcutLongLabel="@string/sc_voice"
+        android:shortcutShortLabel="@string/sc_voice">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="com.pagefold.reader.Main"
+            android:targetPackage="com.pagefold.reader">
+            <extra
+                android:name="tab"
+                android:value="1" />
+        </intent>
+    </shortcut>
+</shortcuts>

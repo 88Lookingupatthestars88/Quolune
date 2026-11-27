@@ -506,13 +506,7 @@ private class Laid(
         return (sa[lo] + (r - ss[lo] - shift)).coerceAtLeast(0)
     }
 
-    /**
-     * 排好的那串字里的位置 → 这一章里的第几个字。
-     *
-     * 存档、[Feed]、切句用的都是章内偏移；[abs] 给的是全书里的位置。两个别混 ——
-     * 混过一次：眼睛记的是全书位置，写存档那一步当成章内偏移，除第一章外全被夹到章末，
-     * 再进来就停在那一章最后一页。
-     */
+    // 全书位置 [abs] → 章内第几个字。存档、[Feed]、切句用的都是章内偏移。
     fun relIn(r: Int): Int {
         val base = a.chStart.getOrElse(ch) { 0 }
         val end = a.chEnd.getOrElse(ch) { base }
@@ -932,9 +926,7 @@ fun ReadScreen(
     }
 
     var ch by remember(book.id) { mutableIntStateOf(0) }
-    // 上次读到哪儿，存的是「这一章里的第几个字」，不是「第几页」。
-    // 章内字偏移不能直接当页号用，一个字符号能有几千，夹过去会落到末页。
-    // 一进书就翻到章尾，看着像「往后跳了一页」，其实是这一格错了。
+    // 上次读到哪儿，存的是这一章里的第几个字。字偏移不能当页号用。
     var restoreAt by remember(book.id) { mutableIntStateOf(book.charOffset) }
     /* 打开时的位置。存一份不动，restoreAt 会被翻页消费掉。 */
     val startOffset = remember(book.id) { book.charOffset }
@@ -954,6 +946,19 @@ fun ReadScreen(
     }
     var page by remember { mutableIntStateOf(0) }
     var pageCount by remember { mutableIntStateOf(1) }
+    /* 耳朵落在哪儿。播着的时候以 [BookPlayer.flow] 为准，停着的时候这一对说话。 */
+    var earCh by remember(book.id) {
+        mutableIntStateOf(
+            BookPlayer.seat?.takeIf { it.id == book.id }?.chapter
+                ?: if (book.heard) book.hearCh else -1
+        )
+    }
+    var earOff by remember(book.id) {
+        mutableIntStateOf(
+            BookPlayer.seat?.takeIf { it.id == book.id }?.src
+                ?: if (book.heard) book.hearOff else -1
+        )
+    }
     // 翻法切换时用来强制「重新落位」一次，见下面那个 LaunchedEffect。
     var modeTick by remember { mutableIntStateOf(0) }
 
@@ -992,15 +997,15 @@ fun ReadScreen(
     }
     var rateOpen by remember { mutableStateOf(false) }
     var timerOpen by remember { mutableStateOf(false) }
+    var stopOpen by remember { mutableStateOf(false) }
 
     var armed by remember(book.id) { mutableStateOf(false) }
-    // 这一回有没有按存档落好位。
-    //
-    // 没落好就先画第 1 页、落好了再滑到第 5 页 —— 眼睛看见的就是「一进来往后翻了一页」。
-    // 所以落位算完之前，正文不画。
+    // 这一回有没有按存档落好位。落好之前正文不画。
     var placed by remember(book.id) { mutableStateOf(false) }
     var settled by remember(book.id) { mutableStateOf(false) }
     var anchor by remember { mutableIntStateOf(-1) }
+    /* 这个 anchor 是什么时候落的。久了的那个不算数，免得按播放跳回几屏之前。 */
+    var anchorAt by remember { mutableLongStateOf(0L) }
     var selKey by remember { mutableIntStateOf(0) }
     var cacheRef by remember { mutableStateOf<ChapterCache?>(null) }
     // 刚拖过进度条：这几秒不要跟着念的位置滚，不然手一松就被拽回去。
@@ -1101,7 +1106,7 @@ fun ReadScreen(
     val ps by BookPlayer.flow.collectAsState()
     val playing = ps.playing
 
-    /** 把「第几章、第几个字」落盘。听书、滚动、翻页三条路共用这一处算法。 */
+    /** 把「第几章、第几个字」落盘。滚动、翻页两条路共用这一处算法。 */
     fun saveAt(a: Atlas, c: Int, rel: Int) {
         if (c !in a.chStart.indices) return
         val base0 = a.chStart[c]
@@ -1114,27 +1119,7 @@ fun ReadScreen(
         )
     }
 
-    /* 听书时的进度：手动节流 3 秒一次，换章立即写。
-* 只在真的在念的时候写 —— 暂停时写会把播放器记着的那一章盖到书架上的阅读位置。 */
-    LaunchedEffect(playing, atlas) {
-        val a = atlas ?: return@LaunchedEffect
-        if (!playing) return@LaunchedEffect
-        var last = 0L
-        var lastCh = -1
-        snapshotFlow { ps.chapter to ps.srcStart }.collect { (c, ss) ->
-            if (ss < 0) return@collect
-            if (!BookPlayer.owns(bookNow.title)) return@collect
-            val now = System.currentTimeMillis()
-            if (c != lastCh || now - last > 3000L) {
-                lastCh = c
-                last = now
-                withContext(Dispatchers.IO) { saveAt(a, c, ss) }
-            }
-        }
-    }
-
-    /* 离开这一页时不从播放器取位置：它记的是念到哪儿，不是眼看到哪儿。
-     * 阅读位置由翻页、滚动那两条路写，各自带 600 毫秒节流。 */
+    /* 听到哪儿由 [Feed.onPos] 单独写进书架，不从这里取：这里记的是眼睛。 */
 
 
     // 备货是「只合成不播」那一趟。播着别的书的时候，这一趟不算数。
@@ -1269,6 +1254,7 @@ fun ReadScreen(
         val chunk = effNow.chunkChars.coerceIn(200, 2000)
         Feed(
             book = bookNow.title,
+            id = book.id,
             count = chapters.size,
             titleOf = { i -> chapters.getOrNull(i)?.title ?: "" },
             linesOf = { i ->
@@ -1287,16 +1273,11 @@ fun ReadScreen(
                     ls
                 }
             },
-            /* 进度写在这里，不写在界面上。 */
+            /* 听到哪儿只写耳朵那一格。眼睛那一格由翻页、滚动两条路写。 */
             onPos = { c, off ->
-                val base = chapters.getOrNull(c)?.start ?: 0
-                val abs = (base + off).coerceIn(0, t.length.coerceAtLeast(0))
-                app.shelf.touch(
-                    book.id, c, off,
-                    if (t.isEmpty()) 0f else abs.toFloat() / t.length,
-                    chNos.getOrElse(c) { 0 },
-                    chapters.getOrNull(c)?.title?.trim().orEmpty(),
-                )
+                earCh = c
+                earOff = off
+                app.shelf.hear(book.id, c, off)
             },
         )
     }
@@ -1317,7 +1298,7 @@ fun ReadScreen(
     LaunchedEffect(bookNow.title) {
         BookPlayer.onChapter = { c ->
             // 念的是别人的书，别把我的回目也一起改。
-            if (BookPlayer.owns(bookNow.title) && c != ch) { ch = c; wantPage = 0; page = 0 }
+            if (BookPlayer.owns(book.id) && c != ch) { ch = c; wantPage = 0; page = 0 }
         }
     }
 
@@ -1337,14 +1318,13 @@ fun ReadScreen(
             toc -> toc = false
             rateOpen -> rateOpen = false
             timerOpen -> timerOpen = false
+            stopOpen -> stopOpen = false
             desk -> desk = false
             else -> onBack()
         }
     }
 
-    // 记下滑动的起止：一是给 canTap 判「这一抬手是不是滑动」，
-    // 二是分清「我们自己跟读滚的」和「用户手动划走的」——
-    // 后者要停一会儿，不然手刚划走就被拽回去。
+    // 滑动的起止时刻：判这一抬手是不是滑动，也分清手划走的和跟读滚的。
     LaunchedEffect(list) {
         snapshotFlow { list.isScrollInProgress }.collect { moving ->
             scrollAt = System.currentTimeMillis()
@@ -1375,7 +1355,7 @@ fun ReadScreen(
         }
     }
 
-    // 换了书或重排了，旧账一概作废。
+    // 换了书或重排了，索引与位置一概作废。
     LaunchedEffect(atlas, bodyStyle) { laidMap.clear() }
 
     // 换了一章，上一次点下的那个位置就不作数了。
@@ -1415,20 +1395,74 @@ fun ReadScreen(
 
     /* 「接着听」那颗圆钮进来的：落在存档那一句，然后直接开口。 */
     var kicked by remember(book.id) { mutableStateOf(false) }
+
+    /**
+     * 开讲的落点：第几章、章内第几个字、眼睛是不是还停在耳朵那一页。
+     * 落在同一页就接着听；翻到别处就从那一页的头一个字起。
+     */
+    fun listenPoint(): Triple<Int, Int, Boolean> {
+        val a2 = atlas
+        val cc = cacheRef
+        val head = if (a2 != null && cc != null) {
+            val pgs = cc.pages(ch)
+            val pg = pgs.getOrNull(page.coerceIn(0, (pgs.size - 1).coerceAtLeast(0)))
+            if (pg == null) startOffset.coerceAtLeast(0) else cc.laid(ch).relIn(pg.start)
+        } else startOffset.coerceAtLeast(0)
+        val live = BookPlayer.flow.value
+        val hCh: Int
+        val hOff: Int
+        if (live.book == bookNow.title && live.srcStart >= 0) {
+            hCh = live.chapter
+            hOff = live.srcStart
+        } else {
+            hCh = earCh
+            hOff = earOff
+        }
+        if (hCh != ch || hOff < 0) return Triple(ch, head, false)
+        if (a2 == null || cc == null) return Triple(hCh, hOff, true)
+        val ld = cc.laid(ch)
+        val base = a2.chStart.getOrElse(ch) { 0 }
+        val same = cc.pageOf(ch, ld.rendered(base + hOff)) ==
+            cc.pageOf(ch, ld.rendered(base + head))
+        return if (same) Triple(hCh, hOff, true) else Triple(ch, head, false)
+    }
+
+    /** 开口。眼睛还在耳朵那一页就续这一场，否则从这一页的头一个字起一场新的。 */
+    fun startListen() {
+        val (c0, r0, same) = listenPoint()
+        if (same && BookPlayer.holds(book.id)) {
+            BookPlayer.holder?.resumeNow()
+            return
+        }
+        scope.launch {
+            feed.rate = rate
+            beginAt(app, feed, c0, r0, effNow, bookNow.tuneJson)
+        }
+    }
+
     LaunchedEffect(armed, atlas) {
         if (!autoPlay || kicked) return@LaunchedEffect
         if (!armed) return@LaunchedEffect
         if (atlas == null) return@LaunchedEffect
         /* 这一格不能进 key：一改就从外面把这一场取消掉，念到一半被掐。 */
         kicked = true
-        feed.rate = rate
-        val st = BookPlayer.flow.value
-        if (st.total > 0 && BookPlayer.owns(bookNow.title)) {
-            /* 手上这一场就是这本书：接着刚才那里念。 */
-            BookPlayer.holder?.resumeNow()
-        } else {
-            beginAt(app, feed, ch, startOffset.coerceAtLeast(0), effNow, bookNow.tuneJson)
-        }
+        startListen()
+    }
+
+    /* 不听了的时候翻到别处：把耳朵挪到眼睛这一页的开头，下次点继续从这儿开口。 */
+    LaunchedEffect(playing, ch, page, atlas, placed) {
+        if (playing || !armed || !placed) return@LaunchedEffect
+        val a2 = atlas ?: return@LaunchedEffect
+        val cc = cacheRef ?: return@LaunchedEffect
+        val pgs = cc.pages(ch)
+        val pg = pgs.getOrNull(page.coerceIn(0, (pgs.size - 1).coerceAtLeast(0))) ?: return@LaunchedEffect
+        val head = cc.laid(ch).relIn(pg.start)
+        val (hCh, _, same) = listenPoint()
+        /* 眼睛还在耳朵那一页：这一页中间停过的位置要留着，别挪到页首。 */
+        if (same && hCh == ch) return@LaunchedEffect
+        earCh = ch
+        earOff = head
+        app.shelf.hear(book.id, ch, head)
     }
 
     /* 换翻法：左右翻 ↔ 上下滚。 */
@@ -1639,24 +1673,24 @@ fun ReadScreen(
                         }
                         // 念到哪一句，就翻到那一页。
                         // 比的是原文偏移：srcStart 记的是章内第几个字，不是排版后的位置。
-                                                LaunchedEffect(ps.chapter, ps.srcStart, playing, bar.state) {
-                            if (!playing || ps.srcStart < 0 || pagesNow.isEmpty()) return@LaunchedEffect
-                            if (ps.chapter != ch) return@LaunchedEffect
-                            // 选着字的时候不翻页。
-                            if (bar.state == TextToolbarStatus.Shown) return@LaunchedEffect
-                            val abs = a.chStart.getOrElse(ch) { 0 } + ps.srcStart
-                            var i = 0
-                            for (k in pagesNow.indices) {
-                                if (laidNow.abs(pagesNow[k].start) <= abs) i = k else break
+                        LaunchedEffect(pagesNow.size, ch, a, laidNow) {
+                            BookPlayer.flow.collect { st ->
+                                if (!st.playing || st.srcStart < 0) return@collect
+                                if (st.chapter != ch) return@collect
+                                // 选着字的时候不翻页。
+                                if (bar.state == TextToolbarStatus.Shown) return@collect
+                                val abs = a.chStart.getOrElse(ch) { 0 } + st.srcStart
+                                var i = 0
+                                for (k in pagesNow.indices) {
+                                    if (laidNow.abs(pagesNow[k].start) <= abs) i = k else break
+                                }
+                                if (i != page) page = i
                             }
-                            if (i != page) page = i
                         }
 
                         // 翻一页。章内和跨章走同一条路：没有过道页，没有第二套坐标，
                         // 换章只换内容，不重建这一块，免得整页闪一下。
-                        var dir by remember { mutableIntStateOf(1) }
                         val turn: (Int) -> Unit = { d ->
-                            dir = d
                             flipAt = System.currentTimeMillis()
                             if (d > 0) {
                                 if (page + 1 < pagesNow.size) page += 1
@@ -1673,8 +1707,7 @@ fun ReadScreen(
                                 }
                             }
                         }
-                        // 只有一页的时候，左右划没有任何意义 —— 划了也不动，
-                        // 手感上就是「这块卡住了」。索性不收这个手势。
+                        // 只有一页的时候不收左右划。
                         Box(
                             Modifier.fillMaxSize()
                                 /* 左右翻：最外层自己接一道手势，抬手时判定。 */
@@ -1722,7 +1755,12 @@ fun ReadScreen(
                             } else AnimatedContent(
                                 targetState = ch to pi,
                                 transitionSpec = {
-                                    val f = dir
+                                    /* 方向按「从哪一页到哪一页」定，不认手上那一下。
+                                     * 往回翻和念到前面一句往回拽，都从左边进。 */
+                                    val back = if (targetState.first != initialState.first) {
+                                        targetState.first < initialState.first
+                                    } else targetState.second < initialState.second
+                                    val f = if (back) -1 else 1
                                     slideInHorizontally(tween(210)) { w -> w * f } togetherWith
                                         slideOutHorizontally(tween(210)) { w -> -w * f }
                                 },
@@ -1747,10 +1785,10 @@ fun ReadScreen(
                                             laid = ld, from = pg.start, to = pg.end, style = bodyStyle,
                                             lines = pg.lines,
                                             hlFrom = markFrom, hlTo = markTo, selKey = selKey,
-                                            onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis() },
+                                            onDown = { abs -> anchor = abs; anchorAt = System.currentTimeMillis(); pressedAt = anchorAt },
                                             onTag = { abs -> whoAbs = abs },
                                             selRect = if (bar.state == TextToolbarStatus.Shown) bar.rect else Rect.Zero,
-                                            onSelStart = { abs -> anchor = abs },
+                                            onSelStart = { abs -> anchor = abs; anchorAt = System.currentTimeMillis() },
                                             onTap = { if (canTap()) desk = !desk },
                                             canTap = { canTap() },
                                             // 左右翻不用这条账：它按页切，不按块滚。
@@ -1796,11 +1834,8 @@ fun ReadScreen(
                                 val pgs = cache.pages(c)
                                 if (pgs.isEmpty()) return@collect
                                 val ld = cache.laid(c)
-                                // 夹在这一回的正文范围里。块会跨过章尾，不夹的话
-                                // 「最后一页」会被顶成 100%，进度条自己跑到最右。
-                                // 页表里的 start 是「排好版的那串字」里的位置，不是全书位置。
-                                // 拿全书位置去跟它比，会整整错开一章的缩进和标题，页码算出来是假的。
-                                // 页码取「正在念的那一页」。取错的话条子先冲到头再弹回来。
+                                // 夹在这一回的正文范围里。页表里记的是排版后那串字的位置，不是全书位置。
+                                // 块会跨过章尾，不夹的话最后一页会被顶到 100%。
                                 pageCount = pgs.size
                                 page = pgs.indexOfLast { ld.abs(it.start) <= abs }
                                     .coerceIn(0, pgs.size - 1)
@@ -1902,10 +1937,10 @@ fun ReadScreen(
                                     tag = if (markOn) tagOf(bc) else null,
                                     tagSig = if (markOn) markTick + 1 else 0,
                                     paraGap = effNow.paraGap,
-                                    onDown = { abs -> anchor = abs; pressedAt = System.currentTimeMillis(); guardAt = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset },
+                                    onDown = { abs -> anchor = abs; anchorAt = System.currentTimeMillis(); pressedAt = anchorAt; guardAt = list.firstVisibleItemIndex to list.firstVisibleItemScrollOffset },
                                     onTag = { abs -> whoAbs = abs },
                                     selRect = if (bar.state == TextToolbarStatus.Shown) bar.rect else Rect.Zero,
-                                    onSelStart = { abs -> anchor = abs },
+                                    onSelStart = { abs -> anchor = abs; anchorAt = System.currentTimeMillis() },
                                     onTap = { if (canTap()) desk = !desk },
                                     canTap = { canTap() },
                                     onLaid = { ld, r -> laidMap[bi] = ld to r },
@@ -1962,16 +1997,13 @@ fun ReadScreen(
                 } else if (pageCount <= 1) 0f else page.toFloat() / (pageCount - 1),
                 playing = playing,
                 rate = rate,
-                stopHere = settings.stopAtChapter,
+                stopChapters = settings.stopChapters,
                 sleepLeft = sleepLeft,
                 onBack = onBack,
                 onToc = { toc = true },
                 onSet = { bookSet = true },
                 onSeek = { frac ->
-                    // 拖到哪就停在哪，而且**念也跟过去**。
-                    //
-                    // 画面和音频一起跳。只挪画面的话，屏幕上跳了，声音还在原处。
-                    // 隔一会儿「跟着念的位置滚」那条又把画面拽回去。
+                    // 拖到哪就停在哪，念也跟着过去。只挪画面的话，跟读那条隔一会儿就把画面拽回来。
                     quietUntil = System.currentTimeMillis() + 2200
                     val n = pageCount.coerceAtLeast(1)
                     val target = (frac * (n - 1)).roundToInt().coerceIn(0, n - 1)
@@ -2000,6 +2032,8 @@ fun ReadScreen(
                         if (effNow.turn != TurnMode.FLIP && a2 != null) {
                             scope.launch { list.scrollToItem(a2.blockOf(a2.chStart.getOrElse(ch) { 0 })) }
                         }
+                        /* 正在念的时候换章，声音也得跟过去，否则「跟着念的位置滚」那条会把画面拽回来。 */
+                        if (playing) scope.launch { beginAt(app, feed, ch, 0, effNow, bookNow.tuneJson) }
                     }
                 },
                 onNextCh = {
@@ -2009,6 +2043,7 @@ fun ReadScreen(
                         if (effNow.turn != TurnMode.FLIP && a2 != null) {
                             scope.launch { list.scrollToItem(a2.blockOf(a2.chStart.getOrElse(ch) { 0 })) }
                         }
+                        if (playing) scope.launch { beginAt(app, feed, ch, 0, effNow, bookNow.tuneJson) }
                     }
                 },
                 onPrevLine = { BookPlayer.holder?.seekLine(-1) },
@@ -2016,33 +2051,33 @@ fun ReadScreen(
                 onPlay = {
                     if (playing) BookPlayer.holder?.pauseNow()
                     else {
-                        val st = BookPlayer.flow.value
-                        if (st.total > 0) BookPlayer.holder?.resumeNow()
-                        else scope.launch {
-                            // 只有「点的位置就在眼下这一章」才拿它当起点。
-                            // 隔着几十章的老 anchor 一律作废 —— 那一跳就是它干的。
-                            val at = anchor.takeIf { it > 0 && a != null && a.chOfAbs(it) == ch } ?: -1
+                        /* 手指刚在正文上按过就从那儿开口；否则续这一场、再退到座位。
+                         * 隔久了的老 anchor 不算 —— 滑一下屏幕会留一个，拿它当起点就跳走了。 */
+                        val at = anchor.takeIf {
+                            it > 0 && a != null && a.chOfAbs(it) == ch &&
+                                System.currentTimeMillis() - anchorAt < 3000
+                        } ?: -1
+                        if (at > 0) {
                             anchor = -1
-                            feed.rate = rate
-                            beginAt(app, feed, ch, anchorRel(a, ch, at), effNow, bookNow.tuneJson)
+                            scope.launch {
+                                feed.rate = rate
+                                beginAt(app, feed, ch, anchorRel(a, ch, at), effNow, bookNow.tuneJson)
+                            }
+                        } else {
+                            startListen()
                         }
                     }
                 },
                 onRate = { rateOpen = true },
                 onTimer = { timerOpen = true },
-                onStopHere = {
-                    app.field.edit { it.copy(stopAtChapter = !it.stopAtChapter, autoNext = it.stopAtChapter) }
-                },
+                onStopPick = { stopOpen = true },
                 // 「不听了」：连通知一起收掉。
                 onQuit = { BookPlayer.quit() },
                 hasSession = ps.total > 0,
             )
         }
 
-        // 念多快 / 念到几时停，都摆在整个屏幕的底层。
-        //
-        // 挂在整页这一层，不塞进控制条那个 Box：那个 Box 只有一条控制条那么高，
-        // 「念到几时停」于是从屏幕顶上翻出来，把标题顶进状态栏。
+        // 念多快 / 听到哪 / 定时关闭都挂在这一层。放进控制条那个 Box 会被它的高度裁掉。
         if (rateOpen) {
             SheetPop(title = "念多快", onClose = { rateOpen = false }) {
                 FlowChips(
@@ -2056,6 +2091,16 @@ fun ReadScreen(
                     bookNow = bookNow.copy(rate = r)
                     BookPlayer.holder?.setRate(r)
                     rateOpen = false
+                }
+            }
+        }
+        /* 连听几章。数含此刻这一章，1 就是念完本章停。 */
+        if (stopOpen) {
+            SheetPop(title = "听到哪", onClose = { stopOpen = false }) {
+                FlowChips(STOP_CHOICES.map { it to stopLabel(it) }, settings.stopChapters) { n ->
+                    app.field.edit { it.copy(stopChapters = n) }
+                    BookPlayer.holder?.setStopChapters(n)
+                    stopOpen = false
                 }
             }
         }
@@ -2111,7 +2156,6 @@ fun ReadScreen(
                 onStart = { m ->
                     Sleep.start(m)
                     sleepLeft = Sleep.leftSec()
-                    app.field.edit { it.copy(stopAtChapter = false, autoNext = true) }
                     timerOpen = false
                 },
                 onClear = {
@@ -2199,17 +2243,20 @@ fun ReadScreen(
                         chNos.getOrElse(c) { 0 }, c, chapters.getOrNull(c)?.title.orEmpty(),
                     )
                 },
-                onPrefetch = {
+                chCount = chapters.size,
+                nowCh = ch,
+                onPrefetch = { wantFrom, wantEnd ->
                     // 正在备的时候，这颗按钮是「停手」。
                     if (prep?.running == true) {
                         BookPlayer.quit()
                         prep = null
                         BookPlayer.say("不备了")
                     } else {
-                    val from = ch + 1
-                    val want = effNow.cacheChapters.coerceIn(1, 30)
-                    if (from >= chapters.size) {
-                        BookPlayer.say("已经是最后一章了，没得往后备")
+                    val last = (chapters.size - 1).coerceAtLeast(0)
+                    val from = wantFrom.coerceIn(0, last)
+                    val to = wantEnd.coerceIn(from, last)
+                    if (from > last) {
+                        BookPlayer.say("这本书没有这么多章")
                     } else {
                         val pool = Catalog.ours(effNow.engines, app.box.custom())
                         if (pool.isEmpty()) {
@@ -2217,12 +2264,13 @@ fun ReadScreen(
                         } else {
                             // 备货要用同一套合成通道，所以得先把手上的播放让开。
                             BookPlayer.holder?.stopNow()
-                            BookPlayer.say("从第 ${from + 1} 章起备 $want 章，备完自己收手")
-                            prep = PrepNow(true, from, 0, 0, (from + want - 1).coerceAtMost(chapters.size - 1), "")
+                            BookPlayer.say("从第 ${from + 1} 章备到第 ${to + 1} 章，备完自己收手")
+                            prep = PrepNow(true, from, 0, 0, to, "")
                             BookPlayer.run(app) {
                                 it.play(
                                     feed, from, 0, effNow, pool,
                                     cacheOnlyMode = true, tune = bookNow.tuneJson,
+                                    stopCh = to,
                                 )
                             }
                         }
@@ -2390,15 +2438,14 @@ private suspend fun beginAtUnsafe(
 
     val f2 = if (cut <= 0) feed else Feed(
         book = feed.book,
+        id = feed.id,
         count = feed.count,
         titleOf = feed.titleOf,
         rate = feed.rate,
         onPos = feed.onPos,
         linesOf = { i ->
             val ls = feed.linesOf(i)
-            // 空章节（整章都是空白、或者切句没切出东西）。
-            // m 是空的时候，-1 拿去 coerceIn 会抛「Cannot coerce value to an empty range」，
-            // 在协程里没人接，就是闪退。
+            // 空章节：整章空白，或者切句没切出东西。空表上 coerceIn 会抛，协程里没人接就是闪退。
             if (i != ch || ls.isEmpty()) ls
             else ls.toMutableList().also { m ->
                 val l = m[at.coerceIn(0, m.size - 1)]
@@ -2749,7 +2796,7 @@ private fun PrepLine(prep: PrepNow?, gap: Int, nameOf: (Int) -> String) {
             .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
         if (row == null) {
-            T("尚未预缓存。按下方按钮从下一章开始。", size = 11, color = s.inkFaint)
+            T("尚未预缓存。上面那两格是起止章，按钮照它备。", size = 11, color = s.inkFaint)
         } else if (row.running) {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2783,7 +2830,7 @@ private fun PrepLine(prep: PrepNow?, gap: Int, nameOf: (Int) -> String) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     T(row.note.ifBlank { "备到" }, size = 11, color = s.inkDim)
                     Spacer(Modifier.weight(1f))
-                    T(if (gap > 0) "往后 $gap 章" else "没开", size = 10, color = s.inkFaint)
+                    T(if (gap > 0) "共 $gap 章" else "没开", size = 10, color = s.inkFaint)
                 }
                 Spacer(Modifier.height(3.dp))
                 T(
@@ -2811,7 +2858,11 @@ private fun BookSetSheet(
     prep: PrepNow?,
     /** 第几章在书里叫什么。备货那几行照它写。 */
     chLabel: (Int) -> String,
-    onPrefetch: () -> Unit,
+    /** 全书几章。预缓存那一格的上限。 */
+    chCount: Int,
+    /** 眼下停在第几章。没设过起止时，它当默认值。 */
+    nowCh: Int,
+    onPrefetch: (Int, Int) -> Unit,
     onClose: () -> Unit,
 ) {
     val s = LocalSkin.current
@@ -2860,11 +2911,7 @@ private fun BookSetSheet(
                     }
             ) {
                 // ── 版式 ────────────────────────────────
-                //
-                // 这五格写的是**这一本**，不是全局。
-                //
-                // 只写进 book.tuneJson，不写 field：两边共用一格会互相覆盖。
-                // 新书收进来时从定音抄一份快照。
+                // 这五格写的是这一本：只进 book.tuneJson，不写 field。新书收进来时从定音抄一份。
                 Group("版式")
                 TuneRow("fontSize", eff, ::tune)
                 TuneRow("lineGap", eff, ::tune)
@@ -2879,9 +2926,7 @@ private fun BookSetSheet(
 
                 // ── 声音 ────────────────────────────────
                 Group("声音")
-                // 显示的必须是**真正会用的那一副**。
-                // 存的那个名字可能早就不在音色库里了，
-                // 照抄它等于骗人；一副都挑不出来就写「未设置」。
+                // 显示真正会用的那一副。存的名字可能已经不在音色库里，挑不出来就写「未设置」。
                 Row2("旁白", "朗读旁白的音色") {
                     PickChip(narName.ifBlank { "未设置" }, narName.isNotBlank(), { pickVoice = "n" })
                 }
@@ -2898,16 +2943,33 @@ private fun BookSetSheet(
                     PickChip("去设", false, { onCast() })
                 }
 
-                // ── 读法 ──────────────────────────────
-                Group("念的语气")
-                TuneRow("context", eff, ::tune)
-                TuneRow("next", eff, ::tune)
+                // ── 驿传 ──────────────────────────────
+                // 分组名与顺序同定音那一块，两边指的是同一件事，叫法必须一样。
+                Group("驿传")
+                Row2("按段落断语气", null) {
+                    Pill(settings.cue) { app.field.edit { c -> c.copy(cue = it) } }
+                }
+                TuneRow("prefetchChars", eff, ::tune)
                 TuneRow("chunkChars", eff, ::tune)
                 TuneRow("gapMs", eff, ::tune)
 
                 Group("预缓存")
-                TuneRow("prefetch", eff, ::tune)
-                TuneRow("cacheChapters", eff, ::tune)
+                val mark = remember(tuneJson) { com.pagefold.reader.field.Tune.decode(tuneJson) }
+                val last = (chCount - 1).coerceAtLeast(0)
+                val start = (mark["prepStart"] ?: nowCh).coerceIn(0, last)
+                val end = (mark["prepEnd"] ?: (start + eff.cacheChapters - 1)).coerceIn(start, last)
+                Row2("起始章", "从这一章开始备") {
+                    Num(start + 1, { tune("prepStart", it - 1) }, 1, chCount.coerceAtLeast(1), 1, "章")
+                }
+                Row2("结束章", "备到这一章为止") {
+                    Num(end + 1, { tune("prepEnd", it - 1) }, 1, chCount.coerceAtLeast(1), 1, "章")
+                }
+                Btn(
+                    "结束章用全书最后一章",
+                    { tune("prepEnd", last) },
+                    BtnKind.GHOST,
+                    Modifier.fillMaxWidth()
+                )
 
                 // 备到哪儿了，得写出来：在备、备到第几回、备没备完。
                 Spacer(Modifier.height(10.dp))
@@ -2919,9 +2981,12 @@ private fun BookSetSheet(
                 )
 
                 Spacer(Modifier.height(8.dp))
+                val readyEnd = (com.pagefold.reader.field.Tune.decode(tuneJson)["prepEnd"]
+                    ?: (start + eff.cacheChapters - 1)).coerceIn(start, last)
                 Btn(
-                    if (prep?.running == true) "这就停手" else "把往后 ${eff.cacheChapters.coerceIn(0, 20)} 章先备下",
-                    onPrefetch,
+                    if (prep?.running == true) "这就停手"
+                    else "把第 ${start + 1} 到第 ${readyEnd + 1} 章备下",
+                    { onPrefetch(start, readyEnd) },
                     if (prep?.running == true) BtnKind.DANGER else BtnKind.GHOST,
                     Modifier.fillMaxWidth(),
                 )
@@ -2937,9 +3002,7 @@ private fun BookSetSheet(
                 Btn(
                     "这一本全照默认",
                     {
-                        // 「全照默认」= 抄一份此刻定音里那套，不是清空。
-                        // 清空等于没有版式，落回全局 —— 而全局之后还会被人改，
-                        // 那样这本书的版式就又跟着外面跑了。
+                        // 「全照默认」抄一份此刻定音里那套，不是清空 —— 清空就落回全局。
                         val snap = com.pagefold.reader.field.Tune.snapshot(settings)
                         tuneJson = snap
                         onTune(snap)
@@ -2964,10 +3027,7 @@ private fun BookSetSheet(
                 groups = pool,
                 current = if (vKey == "n") narName else diaName,
                 onPick = { v ->
-                    // 写进「这一本」，不写全局。
-                    //
-                    // 这张纸的标题是「这一本怎么读」，末尾还有「这一本全照默认」——
-                    // 结果改旁白改的是全书库的默认，等于换个书就变回去了。
+                    // 写进这一本的 tuneJson，不写全局。
                     onVoice(vKey == "n", v.name)
                     pickVoice = null
                 },
@@ -3060,7 +3120,7 @@ private fun Num(value: Int, onChange: (Int) -> Unit, min: Int, max: Int, step: I
     Row(verticalAlignment = Alignment.CenterVertically) {
         Key("−") { if (value - step >= min) onChange(value - step) }
         Box(
-            Modifier.width(62.dp).height(32.dp).clip(RoundedCornerShape(8.dp)).background(s.panelSink),
+            Modifier.width(76.dp).height(32.dp).clip(RoundedCornerShape(8.dp)).background(s.panelSink),
             contentAlignment = Alignment.Center
         ) { T("$value$unit", size = 12, color = s.ink) }
         Key("+") { if (value + step <= max) onChange(value + step) }
@@ -3207,7 +3267,8 @@ private fun Desk(
     progress: Float,
     playing: Boolean,
     rate: Int,
-    stopHere: Boolean,
+    /** 连听几章后停。0 = 一直听。 */
+    stopChapters: Int,
     sleepLeft: Int,
     onBack: () -> Unit,
     onToc: () -> Unit,
@@ -3220,7 +3281,7 @@ private fun Desk(
     onPlay: () -> Unit,
     onRate: () -> Unit,
     onTimer: () -> Unit,
-    onStopHere: () -> Unit,
+    onStopPick: () -> Unit,
     onQuit: () -> Unit,
     hasSession: Boolean,
 ) {
@@ -3244,7 +3305,7 @@ private fun Desk(
             Box(Modifier.fillMaxWidth().height(1.dp).background(s.ink.copy(alpha = 0.08f)))
             Spacer(Modifier.height(6.dp))
 
-            // 一、这本书与出口
+            // 这本书与出口
             Row(
                 Modifier.fillMaxWidth().padding(start = 10.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -3264,21 +3325,20 @@ private fun Desk(
                 Tap("怎么读", onSet)
             }
 
-            // 二、上一章 ｜ 第几页 ｜ 下一章
+            // 第几页。章之间怎么走在下排那几个键上，这一行只报位置。
             Spacer(Modifier.height(6.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ArrowWord("上一章", alignEnd = false, onPrevCh)
                 T(
                     "第 $shownPage 页，共 $total 页",
                     size = 12,
                     color = if (seekAt != null) s.flame else s.ink,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
+                    align = androidx.compose.ui.text.style.TextAlign.Center,
                 )
-                ArrowWord("下一章", alignEnd = true, onNextCh)
             }
 
             Box(Modifier.padding(horizontal = 8.dp)) {
@@ -3294,10 +3354,7 @@ private fun Desk(
                 )
             }
 
-            // 三、定时。一整条横带，只有一行字。
-            //
-            // 定了就摆倒计时，没定就摆「定时关闭」四个字。
-            // 底下的解释一律不要 —— 那是在替用户判断他看不看得懂。
+            // 定时。一整条横带：定了摆倒计时，没定摆「定时关闭」。
             Spacer(Modifier.height(2.dp))
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp)
@@ -3326,15 +3383,19 @@ private fun Desk(
 
             Spacer(Modifier.height(8.dp))
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Tap("上一句", onPrevLine, wide = true)
-                Spacer(Modifier.width(24.dp))
+                Tap("上一句", onPrevLine)
+                Spacer(Modifier.width(5.dp))
+                Tap("上一章", onPrevCh, small = true)
+                Spacer(Modifier.width(9.dp))
                 BigPause(playing, onPlay)
-                Spacer(Modifier.width(24.dp))
-                Tap("下一句", onNextLine, wide = true)
+                Spacer(Modifier.width(9.dp))
+                Tap("下一章", onNextCh, small = true)
+                Spacer(Modifier.width(5.dp))
+                Tap("下一句", onNextLine)
             }
 
             Spacer(Modifier.height(8.dp))
@@ -3345,7 +3406,7 @@ private fun Desk(
             ) {
                 Tap(rateText(rate), onRate, on = rate != 100)
                 Spacer(Modifier.width(8.dp))
-                Tap("读完这停", onStopHere, on = stopHere)
+                Tap(if (stopChapters > 0) "听 $stopChapters 章" else "一直听", onStopPick, on = stopChapters > 0)
                 // 没在念的时候不摆「不听了」—— 一颗永远按不动的按钮只是噪音。
                 if (hasSession) {
                     Spacer(Modifier.width(8.dp))
@@ -3357,28 +3418,6 @@ private fun Desk(
     }
 }
 
-/** 上一章 / 下一章。字轻，箭头收在靠里那一侧，一行里三样东西重量相当。 */
-@Composable
-private fun ArrowWord(label: String, alignEnd: Boolean, onClick: () -> Unit) {
-    val s = LocalSkin.current
-    Row(
-        Modifier.clip(RoundedCornerShape(8.dp))
-            .tap { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (!alignEnd) {
-            T("‹", size = 14, color = s.inkFaint)
-            Spacer(Modifier.width(3.dp))
-            T(label, size = 12, color = s.inkDim)
-        } else {
-            T(label, size = 12, color = s.inkDim)
-            Spacer(Modifier.width(3.dp))
-            T("›", size = 14, color = s.inkFaint)
-        }
-    }
-}
-
 /** 一个能被按的「字」。不画边框：一屏六个带框的格子，看着像仪表盘。 */
 @Composable
 private fun Tap(
@@ -3387,6 +3426,7 @@ private fun Tap(
     on: Boolean = false,
     enabled: Boolean = true,
     wide: Boolean = false,
+    small: Boolean = false,
 ) {
     val s = LocalSkin.current
     val fg = when {
@@ -3406,10 +3446,13 @@ private fun Tap(
             .then(
                 if (enabled) Modifier.tap { onClick() } else Modifier
             )
-            .padding(horizontal = if (wide) 20.dp else 13.dp, vertical = 9.dp),
+            .padding(
+                horizontal = if (wide) 20.dp else if (small) 8.dp else 12.dp,
+                vertical = if (small) 8.dp else 9.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 12.sp, color = fg, maxLines = 1)
+        Text(label, fontSize = if (small) 11.sp else 12.sp, color = fg, maxLines = 1)
     }
 }
 
@@ -3740,6 +3783,11 @@ private fun FlowChips(items: List<Pair<Int, String>>, picked: Int, onPick: (Int)
         }
     }
 }
+
+/** 「听几章」的档位。数含此刻这一章，1 就是念完本章停。 */
+private val STOP_CHOICES = listOf(0, 1, 2, 3, 5, 10)
+
+private fun stopLabel(n: Int) = if (n <= 0) "一直听" else "$n 章"
 
 /** 切一章的签：哪几个位置是对白、各归谁。键是全书偏移，跟 [Laid] 取签、跟名字签点开时查的是同一把尺子。 */
 private fun cutMarks(

@@ -61,9 +61,9 @@ class MiMo(
             }
             when {
                 pitch <= 85 -> parts.add("明显更低的音调")
-                pitch <= 95 -> parts.add("略低的音调")
+                pitch <= 97 -> parts.add("略低的音调")
                 pitch >= 130 -> parts.add("明显更高的音调")
-                pitch >= 106 -> parts.add("略高的音调")
+                pitch >= 103 -> parts.add("略高的音调")
             }
             val m = mood.trim()
             if (m.isNotEmpty() && m != "平静" && m != "无") parts.add("「$m」的语气")

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 进程起来到第一帧之间铺的那一块地色。 -->
+    <color name="boot_ground">#F2ECDF</color>
+
+    <!-- 播放通知：宣纸底、墨字、朱印色的选中态。 -->
+    <color name="note_surface">#F7F1E4</color>
+    <color name="note_ink">#2B2620</color>
+    <color name="note_dim">#8A7F70</color>
+    <color name="note_accent">#B4462C</color>
+</resources>

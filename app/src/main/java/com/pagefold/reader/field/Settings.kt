@@ -34,15 +34,14 @@ data class Settings(
     /** 会想事的那几路接口（派角时用）。 */
     val chatJson: String = "",
 
-    // 头一屏是哪一页。3 = 定音。
-    //
-    // 第一次装的人得先在这里把嗓源拨开、把钥匙填上、把念法定下来；
-    // 这些不定，进了书也听不见。所以他先落定音，之后再从底栏去别处。
+    // 头一屏是哪一页。3 = 定音：声源、钥匙、念法都在那儿定。
     val homeTab: Int = 3,
     val choseHome: Boolean = false,
     val uiRev: Int = 0,
     /** 已同意的条款版本。0 = 没同意过。政策大改时把 Consent.CONSENT_REV 换成一个更大的数。 */
     val consentRev: Int = 0,
+    /** 是否已同意《声音样本处理说明》。false = 第一次点「复刻嗓音」时先问。 */
+    val voiceConsent: Boolean = false,
 
     // 阅读
     val fontSize: Int = 19,
@@ -73,25 +72,21 @@ data class Settings(
     val castJson: String = "",
 
     // 朗读节奏
-    val chunkChars: Int = 400,          // 一次合成多长。400 字是「出声快」和「请求别太碎」之间的点
-    val prefetch: Int = 6,              // 提前合成的段数
-    val cacheChapters: Int = 5,         // 预缓存章数
+    val chunkChars: Int = 400,          // 单行上限。超过就在句末切一刀
+    val prefetchChars: Int = 3600,      // 往后先合成多少字
+    val cacheChapters: Int = 5,         // 新书默认备几章
     val gapMs: Int = 500,               // 段间间隔
     val reqIntervalMs: Int = 600,       // 两次请求之间歇多久
     val concurrency: Int = 2,           // 同时发几条
     val retry: Int = 3,
-    val context: Int = 1,               // 合成时往上带几句上文
-    val next: Int = 1,                  // 往下带几句下文
     val retryDelayMs: Int = 1200,
 
     /** 按段落判角色（旁白/对白/心里话…），判完再定语速音高。 */
     val cue: Boolean = true,
 
     // ── 收听 ──
-    /** 一章读完自动接下一章。关掉就停在章末。 */
-    val autoNext: Boolean = true,
-    /** 每章读完就停。睡前用，优先于 autoNext。 */
-    val stopAtChapter: Boolean = false,
+    /** 连听几章后停在章末。0 = 一直听。数含开念的那一章：1 就是念完本章停。 */
+    val stopChapters: Int = 0,
     /** 播放倍速 ×100。100=原速，只在已合成的音频上变速，不改合成语速。 */
     val rate: Int = 100,
     /** 接着上次听时，往前退几段。段落边界常常正好切在半句上。 */

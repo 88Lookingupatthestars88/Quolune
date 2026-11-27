@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 图标的底：暖墨，中心微亮。跟珊瑚色的脸接得上，冷蓝会把脸衬得发脏。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="radial"
+        android:centerX="0.5"
+        android:centerY="0.38"
+        android:gradientRadius="78dp"
+        android:startColor="#FF231A15"
+        android:centerColor="#FF14100C"
+        android:endColor="#FF070505" />
+</shape>

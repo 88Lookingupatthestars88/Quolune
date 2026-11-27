@@ -15,8 +15,8 @@ android {
         applicationId = "com.pagefold.reader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 133
-        versionName = "5.2"
+        versionCode = 134
+        versionName = "6.0"
     }
 
     /*

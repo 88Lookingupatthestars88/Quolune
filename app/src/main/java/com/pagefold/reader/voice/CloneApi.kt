@@ -138,12 +138,7 @@ object CloneApi {
             root.endsWith("/v1") -> "$root/uploads/audio/voice"
             else -> "$root/v1/uploads/audio/voice"
         }
-        val ext = when {
-            mime.contains("wav") -> "wav"
-            mime.contains("mpeg") || mime.contains("mp3") -> "mp3"
-            mime.contains("m4a") || mime.contains("mp4") -> "m4a"
-            else -> "mp3"
-        }
+        val ext = AudioFormats.extOf(mime, null) ?: "mp3"
         val tmp = File.createTempFile("clone_", ".$ext")
         try {
             tmp.writeBytes(bytes)
@@ -185,11 +180,7 @@ object CloneApi {
         model: String,
     ): String {
         val root = base.trimEnd('/').let { if (it.endsWith("/v1")) it.removeSuffix("/v1") else it }
-        val ext = when {
-            mime.contains("wav") -> "wav"
-            mime.contains("m4a") || mime.contains("mp4") -> "m4a"
-            else -> "mp3"
-        }
+        val ext = AudioFormats.extOf(mime, null) ?: "mp3"
         val tmp = File.createTempFile("clone_", ".$ext")
         try {
             tmp.writeBytes(bytes)

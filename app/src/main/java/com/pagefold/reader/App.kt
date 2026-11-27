@@ -31,10 +31,12 @@ class App : Application() {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
     )
 
-    override fun onCreate() {
-        super.onCreate()
-        installCrashLog()
-        field = Field(this)
+    /** 书库建好没有。同意之前一直是 false，界面上不能碰 [shelf]。 */
+    val ready: Boolean get() = ::shelf.isInitialized
+
+    /** 同意之后才能建的东西。重复调用没有副作用。 */
+    fun boot() {
+        if (ready) return
         shelf = Shelf(this)
         box = VoiceBox(this)
         vtune = com.pagefold.reader.field.VoiceTune(this)
@@ -51,23 +53,31 @@ class App : Application() {
         com.pagefold.reader.voice.SysCache.attach(this, sys, work)
         com.pagefold.reader.voice.SysCache.warm(field.now.engines)
         /* 旧书补版式快照。挪到后台线程：这一步要读 shelf.json、给每本书拼一份 JSON。 */
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
-            .launch {
-                runCatching {
-                    val now = field.now
-                    val list = shelf.all()
-                    var dirty = false
-                    val out = list.map { b ->
-                        val j = b.tuneJson ?: ""
-                        if (com.pagefold.reader.field.Tune.has(j, "fontSize") && com.pagefold.reader.field.Tune.has(j, "turn")) b
-                        else {
-                            dirty = true
-                            b.copy(tuneJson = com.pagefold.reader.field.Tune.snapshot(now, j))
-                        }
+        work.launch {
+            runCatching {
+                val now = field.now
+                val list = shelf.all()
+                var dirty = false
+                val out = list.map { b ->
+                    val j = b.tuneJson ?: ""
+                    if (com.pagefold.reader.field.Tune.has(j, "fontSize") && com.pagefold.reader.field.Tune.has(j, "turn")) b
+                    else {
+                        dirty = true
+                        b.copy(tuneJson = com.pagefold.reader.field.Tune.snapshot(now, j))
                     }
-                    if (dirty) shelf.save(out)
                 }
+                if (dirty) shelf.save(out)
             }
+            // 冷启动先把「继续听」摆上：上一次是正常退出的话，shelf 里那一格就是最新的位置。
+            runCatching { com.pagefold.reader.play.Shortcuts.refresh(this@App, force = true) }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        installCrashLog()
+        com.pagefold.reader.ui.Legal.attach(this)
+        field = Field(this)
     }
 
     /** 崩了别只留个闪退。异常栈写到 filesDir/last-crash.txt。 */
@@ -91,7 +101,7 @@ class App : Application() {
     }
 
     override fun onTerminate() {
-        runCatching { sys.shutdown() }
+        runCatching { if (::sys.isInitialized) sys.shutdown() }
         super.onTerminate()
     }
 }

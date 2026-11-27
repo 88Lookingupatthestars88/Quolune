@@ -421,9 +421,8 @@ private fun load(kind: StoreKind, app: App): List<Piece> = when (kind) {
     }
 
     StoreKind.VOICE -> {
-        // 自己配的嗓子全存在一个 voices.json 里，没有一条一个文件，
-        // 所以「每副多大」本来是不存在的数。按各自那截 JSON 的长短把整个文件摊开，
-        // 加起来正好等于文件大小 —— 比一律写 0 B 强。
+        // 自己配的嗓子全在一个 voices.json 里。按各自那截 JSON 的长短把文件摊开，
+        // 加起来正好是文件大小。
         val list = app.box.custom()
         val f = File(app.filesDir, "voices.json")
         val total = if (f.exists()) f.length() else 0L

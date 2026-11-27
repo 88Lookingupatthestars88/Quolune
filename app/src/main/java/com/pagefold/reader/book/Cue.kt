@@ -1,12 +1,12 @@
 package com.pagefold.reader.book
 
-/** 一段话该怎么念。「上下文」不是把上一句一起发过去。 */
+/** 一段话该怎么念。三根轴都是连续值，播放侧再按块序抹平。 */
 data class Reading(
     val kind: Kind,
     val rate: Int,      // 相对正常语速的百分比
     val pitch: Int,     // Hz 偏移
     val volume: Int,    // 百分比偏移
-    val pauseMs: Int,   // 这句念完停多久
+    val pauseMs: Int,   // 这块念完停多久
     /** 这一句该用的调门。旁白一个、对白一个，空 = 跟随全局。 */
     val style: String = "",
 ) {
@@ -47,14 +47,16 @@ object Cue {
     private val TAG = Regex("(说道|问道|答道|笑道|骂道|回道|应道|开口|沉声|低声)[：:，,]?\\s*$")
 
     /**
-* 。
-*
-* @param text  这一句
-* @param prev  前面一句（没有就 null）
-* @param next  后面一句（没有就 null）
-* @param mood  用户挑的情绪档
-* @param off   用户把段落判定关掉了
-*/
+     * 判这一块怎么念。
+     *
+     * @param text   这块要念的字
+     * @param prev   前一块
+     * @param next   后一块
+     * @param mood   用户挑的情绪档
+     * @param off    用户把段落判定关掉了
+     * @param style  这副嗓子自己的调门
+     * @param dialog 这块是对白。调用方从 [Line.isDialog] 传，比在剥掉引号的文本里找引号可靠。
+     */
     fun of(
         text: String,
         prev: String?,
@@ -62,71 +64,86 @@ object Cue {
         mood: String,
         off: Boolean,
         style: String = "",
+        dialog: Boolean = false,
     ): Reading {
-        if (off) return Reading(Reading.Kind.NARRATE, 0, 0, 0, 320, style)
+        if (off) return Reading(Reading.Kind.NARRATE, 0, 0, 0, 300, style)
 
         val t = text.trim()
         val head = t.take(24)
+        /* 试听和预览没有行信息，只能退回看引号。 */
+        val dlg = dialog || (Q.containsMatchIn(t) && QEND.containsMatchIn(t))
 
         val kind = when {
             WHISPER.containsMatchIn(head) -> Reading.Kind.WHISPER
             SHOUT.containsMatchIn(head) -> Reading.Kind.SHOUT
+            !dlg -> Reading.Kind.NARRATE
             t.endsWith("？") || t.endsWith("?") -> Reading.Kind.ASK
             t.endsWith("！") || t.endsWith("!") -> Reading.Kind.EXCLAIM
-            Q.containsMatchIn(t) && QEND.containsMatchIn(t) -> Reading.Kind.DIALOG
-            else -> Reading.Kind.NARRATE
+            else -> Reading.Kind.DIALOG
         }
 
-        var r = BASE.getValue(kind)
+        var rate = 0
+        var pitch = 0
+        var vol = 0
+        when (kind) {
+            Reading.Kind.DIALOG -> { rate = 2; pitch = 2; vol = 2 }
+            Reading.Kind.ASK -> { rate = 1; pitch = 5 }
+            Reading.Kind.EXCLAIM -> { rate = 6; pitch = 5; vol = 4 }
+            Reading.Kind.SHOUT -> { rate = 5; pitch = 7; vol = 6 }
+            Reading.Kind.WHISPER -> { rate = -12; pitch = -5; vol = -9 }
+            else -> {}
+        }
 
-        // 上下文校准：单独一句对白听着会飘，前后有旁白托着才像念书
+        /* 句长：长描写放慢，短句收快一点。只差几格，不做台阶。 */
+        when {
+            t.length <= 8 -> rate += 3
+            t.length > 60 -> rate -= 3
+        }
+
+        var pause = pauseOf(t)
+        /* 引子压低、拖慢，把话头递给下一句。 */
+        if (!dlg && t.length <= 14 && TAG.containsMatchIn(t)) {
+            rate -= 5
+            pitch -= 3
+            pause = 220
+        }
+        /* 上一块是引子、这块接话：贴近。 */
         val p = prev?.trim().orEmpty()
+        if (dlg && TAG.containsMatchIn(p)) pause = 240
+        /* 下一块马上有人接：别停太久。 */
         val n = next?.trim().orEmpty()
-
-        // 这句是「某某说道：」这种引子 —— 压低、拖慢，把话头递出去
-        if (kind == Reading.Kind.NARRATE && t.length <= 14 && TAG.containsMatchIn(t)) {
-            r = Reading(Reading.Kind.NARRATE, -5, -3, -2, 220)
-        }
-        // 上一句是引子、这句是对白 —— 接得紧一点
-        if (kind == Reading.Kind.DIALOG && TAG.containsMatchIn(p)) {
-            r = r.copy(pauseMs = 240)
-        }
-        // 下一句马上有人接话 —— 别停太久，像抢话
-        if (n.length in 1..10 && Q.containsMatchIn(n)) {
-            r = r.copy(pauseMs = (r.pauseMs * 0.6f).toInt().coerceAtLeast(150))
-        }
-        // 长段描写 —— 放慢一点点，别赶
-        if (kind == Reading.Kind.NARRATE && t.length > 60) {
-            r = r.copy(rate = r.rate - 3)
+        if (n.length in 1..12 && Q.containsMatchIn(n)) {
+            pause = (pause * 0.7f).toInt().coerceAtLeast(150)
         }
 
         val (mr, mp, mv) = MOOD[mood.trim()] ?: Triple(0, 0, 0)
         return Reading(
             kind = kind,
-            rate = (r.rate + mr).coerceIn(-45, 60),
-            pitch = (r.pitch + mp).coerceIn(-30, 30),
-            volume = (r.volume + mv).coerceIn(-18, 18),
-            pauseMs = r.pauseMs,
+            rate = (rate + mr).coerceIn(-45, 60),
+            pitch = (pitch + mp).coerceIn(-30, 30),
+            volume = (vol + mv).coerceIn(-18, 18),
+            pauseMs = pause,
             style = style.trim(),
         )
     }
 
-    private val BASE: Map<Reading.Kind, Reading> = mapOf(
-        Reading.Kind.NARRATE to Reading(Reading.Kind.NARRATE, 0, 0, 0, 360),
-        Reading.Kind.DIALOG to Reading(Reading.Kind.DIALOG, 3, 2, 2, 300),
-        Reading.Kind.EXCLAIM to Reading(Reading.Kind.EXCLAIM, 9, 6, 5, 280),
-        Reading.Kind.ASK to Reading(Reading.Kind.ASK, 2, 5, 0, 320),
-        Reading.Kind.SHOUT to Reading(Reading.Kind.SHOUT, 7, 8, 7, 250),
-        Reading.Kind.WHISPER to Reading(Reading.Kind.WHISPER, -13, -6, -10, 420),
-    )
+    /** 这块念完之后留多久。标点定档，不按语气类型乱跳。 */
+    private fun pauseOf(t: String): Int = when {
+        t.isEmpty() -> 300
+        t.endsWith("…") || t.endsWith("⋯") -> 700
+        t.endsWith("。") -> 420
+        t.endsWith("！") || t.endsWith("？") || t.endsWith("!") || t.endsWith("?") -> 340
+        t.endsWith("；") || t.endsWith(";") -> 300
+        t.endsWith("，") || t.endsWith("、") || t.endsWith(",") -> 160
+        else -> 300
+    }
 
-    /** 交给嗓源的那一句「怎么念」。 */
-    fun say(r: Reading, mood: String): String {
-        val m = mood.trim()
-        // 中性档不占位：发空串等于告诉对方「照常念」。
+    /** 交给嗓源的那一句「怎么念」。中性档不占位：发空串等于告诉对方照常念。 */
+    fun say(style: String): String {
+        val m = style.trim()
         if (m.isEmpty() || m == "平静" || m == "无") return ""
 
-        /* 按标点断开，只留第一个词。切出来的那段里但凡还带逗号顿号括号，说明用户填的是一句话而不是一个标签，那就整个不发。 */
+        /* 切出来的那段里但凡还带逗号顿号括号，说明填的是一句话而不是一个标签，整个不发。 */
         val head = m.split('，', ',', '。', '；', ';', '：', ':', '、', '（', '(', ' ', '\n')
             .firstOrNull { it.isNotBlank() }?.trim().orEmpty()
         if (head.isEmpty() || head.length > 4) return ""

@@ -50,6 +50,7 @@ fun AboutScreen(
     s: Settings,
     app: App,
     list: LazyListState,
+    onShow: (Legal.Doc) -> Unit,
 ) {
     val skin = LocalSkin.current
 
@@ -60,6 +61,7 @@ fun AboutScreen(
         }.getOrNull().orEmpty().ifBlank { "—" }
     }
 
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
         state = list,
         modifier = Modifier.fillMaxSize(),
@@ -136,7 +138,7 @@ fun AboutScreen(
             }
         }
 
-        /* 项目页。摆在版次下面 —— 版权页的顺序就是「正文、版次、出处」，仓库放在正文中间等于把落款插进了话里。 */
+        /* 项目页，摆在版次下面。 */
         item {
             Column(Modifier.fillMaxWidth().padding(horizontal = Sz.gutter).padding(top = 16.dp)) {
                 LinkCard(
@@ -148,99 +150,42 @@ fun AboutScreen(
         }
         item { Spacer(Modifier.height(10.dp)) }
 
-        /* 免责声明：九条全文铺开。折起来等于没写，读者点开之前什么都看不到。 */
+        /* 三份条款各一个入口。正文在 Legal 里，点开才展开，不在这一屏铺满。 */
         item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 26.dp)) }
         item {
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
-                    .padding(top = 20.dp, bottom = 12.dp)
-            ) {
-                Text(
-                    "免责声明",
-                    fontSize = 15.sp,
-                    color = skin.ink,
-                    fontFamily = skin.titleFont,
-                    letterSpacing = 2.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                Body(Legal.IMPORTANT)
+            Column(Modifier.fillMaxWidth().padding(horizontal = Sz.gutter).padding(top = 18.dp)) {
+                Legal.ALL.forEach { d ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .tap { onShow(d) }
+                            .padding(vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                d.title,
+                                fontSize = Sz.body.sp,
+                                color = skin.ink,
+                                fontFamily = skin.titleFont,
+                                letterSpacing = 0.5.sp,
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                "版本 " + d.version + "　更新 " + d.updated,
+                                fontSize = 11.sp,
+                                color = skin.inkFaint,
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text("›", fontSize = 17.sp, color = skin.inkFaint)
+                    }
+                    Rule()
+                }
             }
         }
-        items(Legal.CLAUSES) { (title, text) ->
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
-                    .padding(bottom = 16.dp)
-            ) {
-                Text(
-                    title,
-                    fontSize = 13.sp,
-                    color = skin.ink,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = skin.titleFont,
-                    letterSpacing = 0.5.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text,
-                    fontSize = 13.sp,
-                    lineHeight = 26.sp,
-                    color = skin.inkDim,
-                )
-            }
-        }
-        item {
-            Column(Modifier.fillMaxWidth().padding(horizontal = Sz.gutter).padding(bottom = 10.dp)) {
-                Text(
-                    "使用本应用即代表您已阅读、理解并同意本声明的全部条款。",
-                    fontSize = 13.sp,
-                    lineHeight = 26.sp,
-                    color = skin.ink,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
+    }
 
-        /* 隐私政策：与免责声明同一层，各自全文铺开。 */
-        item { Rule(Modifier.padding(horizontal = Sz.gutter).padding(top = 20.dp)) }
-        item {
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
-                    .padding(top = 20.dp, bottom = 12.dp)
-            ) {
-                Text(
-                    "隐私政策",
-                    fontSize = 15.sp,
-                    color = skin.ink,
-                    fontFamily = skin.titleFont,
-                    letterSpacing = 2.sp,
-                )
-                Spacer(Modifier.height(10.dp))
-                Body("本应用没有服务器，不收集、不上传、不存储您的任何个人信息。")
-            }
-        }
-        items(Legal.PRIVACY) { (title, text) ->
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = Sz.gutter)
-                    .padding(bottom = 16.dp)
-            ) {
-                Text(
-                    title,
-                    fontSize = 13.sp,
-                    color = skin.ink,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = skin.titleFont,
-                    letterSpacing = 0.5.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text,
-                    fontSize = 13.sp,
-                    lineHeight = 26.sp,
-                    color = skin.inkDim,
-                )
-            }
-        }
-        item { Spacer(Modifier.height(14.dp)) }
+
     }
 }
 

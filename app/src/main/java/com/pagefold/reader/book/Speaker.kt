@@ -7,7 +7,7 @@ private fun atClauseHead(s: String, i: Int): Boolean {
     return !(c in '\u4e00'..'\u9fa5') || c == '，' || c == ','
 }
 
-/** 抽名用的一张表。名字和动词之间的宽度靠状语表卡住。 */
+/** 截掉尾部的标点与空白。 */
 private fun clauseTail(s: String): String {
     var e = s.length
     while (e > 0 && (s[e - 1] == '：' || s[e - 1] == ':' || s[e - 1] == '，' || s[e - 1] == ',' ||
@@ -409,7 +409,7 @@ object Look {
     /** 以这些字收尾的是画面、声音、动作，不是人。 */
     private const val SIGHT_END = "影光色声味形样状报响似般态"
 
-    /** 叠字。中文里叠出来的都是副词或拟声，没有人叫「笑嘿嘿」「白花花」。 */
+    /** 叠字。叠出来的都是副词或拟声，不是名字。 */
     private fun doubled(w: String): Boolean {
         if (w.length < 3) return false
         for (i in 0 until w.length - 1) if (w[i] == w[i + 1]) return true
@@ -1419,7 +1419,7 @@ object Look {
             if (a in dead) continue
             val ca = weight(a)
             var hit = false
-            /* 一、a 里头包着的短名字。 */
+            /* a 里头包着的短名字。 */
             for (i in 0 until a.length - 1) {
                 for (j in i + 2..a.length) {
                     if (i == 0 && j == a.length) continue
@@ -1434,7 +1434,7 @@ object Look {
                 if (hit) break
             }
             if (hit) continue
-            /* 二、a 是长名字的前半截：长名字明显更多，砍 a；a 明显更多，砍长名字。 */
+            /* a 是长名字的前半截：长名字明显更多就砍 a，a 明显更多就砍长名字。 */
             val bigs = longer[a] ?: continue
             for (b in bigs) {
                 if (b in dead) continue
@@ -1570,7 +1570,7 @@ object Look {
     ): Boolean {
         if (w.isEmpty()) return false
 
-        /* 一、字面。这几张表都是「收尾字」，不是「含这个字」——「石阶上」的上、「钟表铺」的铺、「花浇水」的水，都在最后一格。 */
+        /* 这几张表是收尾字表：只看最后一个字，不含即不算。 */
         /* 收尾字表只有简体一份，繁体串（應聲、人報）先归一这一格。 */
         val last = Han.of(w.last())
         if (last in LOC_END) return false
@@ -1785,7 +1785,7 @@ object Look {
         val newVerb = ArrayList<String>()
         val newAdv = ArrayList<String>()
 
-        /* 一、「X：」。先把名字剥掉，剩下的才是说法。 */
+        /* 「X：」先把名字剥掉，剩下的才是说法。 */
         val head = HashMap<String, Int>(512)
         var i = 0
         while (i < n) {
@@ -1819,7 +1819,7 @@ object Look {
             }
         }
 
-        /* 二、名字后面那一截。一个字符一个字符地往前推，不建大正则。 */
+        /* 名字后面那一截：一个字一个字往前推，不建大正则。 */
         val learned = HashMap<String, Int>(256)
         if (names.isNotEmpty()) {
             val ix2 = HashSet<Int>(names.size * 2)
@@ -1934,7 +1934,7 @@ object Match {
 
         fun ok(p: String) = runCatching { Regex(p).containsMatchIn(body) }.getOrDefault(false)
 
-        // 一、名字、状语、动词一个挨一个：最紧，也最不会误伤。
+        // 名字、状语、动词一个挨一个，最紧，也最不会误伤。
         if (verb != null && verb.length > 1) {
             val tight = head +
                 (if (adv != null) "(?:" + java.util.regex.Pattern.quote(adv) + ")?" else "") +
@@ -1942,7 +1942,7 @@ object Match {
             if (ok(tight)) return tight
         }
 
-        // 二、同一个句子里隔了几个字。名字和动词之间允许夹逗号，但不许跨句末和引号。
+        // 同一个句子里隔几个字：中间允许夹逗号，不许跨句末和引号。
         val withVerb = if (verb != null && verb.length > 1) "|(?:" + verb + ")" else ""
         val loose = head + "(?:" + GAP + "{0,12}?)(?:" + one + withVerb + ")"
         if (ok(loose)) return loose
