@@ -1,0 +1,58 @@
+name: 界面
+description: 哪一页看着不对、摆歪了、字被切掉、点了没反应
+title: "[界面] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        写清是哪一页就行，页名照应用里的叫法：书房、音色、试听、阅读、定音、关于。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 哪儿看着不对
+      description: 现在是什么样。写到别人照着这句话能对上你要说的那一处。
+      placeholder: 定音页声源那一节，最右边那个开关右边被切掉一截。
+    validations:
+      required: true
+
+  - type: textarea
+    id: want
+    attributes:
+      label: 你期望它怎么做
+      description: 想到就写。写了我照着这个方向改。空着也行。
+      placeholder: 开关完整露出来。
+    validations:
+      required: false
+
+  - type: textarea
+    id: how
+    attributes:
+      label: 在哪一页看到的
+      description: 页名，加上点过哪几下。说不清就写个页名。
+      placeholder: 定音页，往下划到「声源」。
+    validations:
+      required: true
+
+  - type: input
+    id: ver
+    attributes:
+      label: 版本号
+      description: 关于页最下面那行，比如 6.0。
+      placeholder: "6.0"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号与系统版本
+      description: 手机自带的设置里，关于手机那一页。不确定就空着。
+      placeholder: 小米 8 SE，Android 10
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或补充
+      description: 界面的事有截图最好。直接拖进来。

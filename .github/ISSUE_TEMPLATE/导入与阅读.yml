@@ -1,0 +1,74 @@
+name: 导入与阅读
+description: 书导不进来、打开是乱码、章节和页数乱了
+title: "[导入与阅读] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        导入在书房右上角那个加号。
+        只认 txt 和 epub 两种，选别的会提示「只支持 txt / epub」。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么问题
+      description: 你看到的是什么。有报错原文就照抄，别改字。
+      placeholder: 导入一本 epub，点开第一章，满屏是 PK 开头的乱码。
+    validations:
+      required: true
+
+  - type: textarea
+    id: want
+    attributes:
+      label: 你期望它怎么做
+      description: 想到就写。写了我照着这个方向改。空着也行。
+      placeholder: 导入之后能正常看，别把 epub 当 txt 念。
+    validations:
+      required: false
+
+  - type: textarea
+    id: how
+    attributes:
+      label: 怎么重现
+      description: 从打开应用开始，一步一步写。第几次出现也说一下。
+      placeholder: |
+        1. 书房点右上角加号，选一本 epub
+        2. 点开这本书
+        3. 第一章正文是乱码
+        每次都这样。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: fmt
+    attributes:
+      label: 书是什么格式
+      description: 只认 txt 和 epub。还没导进来的选最后一项。
+      options:
+        - txt
+        - epub
+        - 还没导进来
+        - 不确定
+
+  - type: input
+    id: ver
+    attributes:
+      label: 版本号
+      description: 关于页最下面那行，比如 6.0。
+      placeholder: "6.0"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号与系统版本
+      description: 手机自带的设置里，关于手机那一页。不确定就空着。
+      placeholder: 小米 8 SE，Android 10
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或补充
+      description: 截图直接拖进来。有别的线索也写这。
