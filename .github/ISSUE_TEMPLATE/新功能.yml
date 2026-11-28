@@ -25,8 +25,7 @@ body:
     id: device
     attributes:
       label: 手机型号与系统版本
-      description: 设置 → 关于手机里能看到。不确定就空着。
-      placeholder: 小米 8 SE，Android 10
+      description: 空着也行。
 
   - type: textarea
     id: more

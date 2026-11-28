@@ -1,0 +1,108 @@
+name: 问题反馈
+description: 崩了、念不出来、书读乱了、界面不对
+title: "[问题] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        崩了、念不出来、书读乱了、界面不对，都从这儿填。
+        导入在书房右上角那个加号里，只认 txt 和 epub；听书在阅读页，点一下正文出控制栏。
+        应用自己退出来过，去定音页最下面点「上一回崩在这儿」的复制，整段粘进「崩溃说明」。
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出在哪儿
+      description: 拿不准就选最后一项。
+      options:
+        - 导入与阅读
+        - 听书
+        - 闪退
+        - 界面
+        - 说不清
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 出了什么问题
+      description: 看到什么写什么。弹出来的报错一并粘上，改了字就对不上。
+      placeholder: 导入一本 epub，点开第一章，满屏是 PK 开头的乱码。
+    validations:
+      required: true
+
+  - type: textarea
+    id: want
+    attributes:
+      label: 你期望它怎么做
+      description: 不想写就跳过。
+      placeholder: 导入之后能正常看。
+    validations:
+      required: false
+
+  - type: textarea
+    id: how
+    attributes:
+      label: 怎么重现
+      description: 从哪儿点起来的就从头说。每次都会，还是偶尔碰上一次，顺口带一句。
+      placeholder: |
+        1. 书房点右上角加号，选一本 epub
+        2. 点开这本书
+        3. 第一章正文是乱码
+        每次都这样。
+    validations:
+      required: true
+
+  - type: textarea
+    id: stack
+    attributes:
+      label: 崩溃说明
+      description: 只有真的崩过才有。定音 → 上一回崩在这儿 → 复制，整段粘进来。
+    validations:
+      required: false
+
+  - type: input
+    id: src
+    attributes:
+      label: 开的是哪家声源
+      description: 听书出事才要填。定音 → 声源里接上的那一家，名字照抄。
+      placeholder: MiniMax
+    validations:
+      required: false
+
+  - type: dropdown
+    id: fmt
+    attributes:
+      label: 书是什么格式
+      description: 导入或者阅读出事才要填。
+      options:
+        - txt
+        - epub
+        - 不在书上
+        - 不确定
+    validations:
+      required: false
+
+  - type: input
+    id: ver
+    attributes:
+      label: 版本号
+      description: 关于页最下面那行，照抄。
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: 手机型号与系统版本
+      description: 知道就写。
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截图或补充
+      description: 截图直接拖进来。
